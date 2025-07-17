@@ -35,24 +35,6 @@ The project aims to predict pedestrian-level wind speeds around buildings using:
 - **Efficient batch processing** with configurable batch sizes
 - **Memory optimization** for large-scale simulations
 
-## Project Structure
-
-```
-feilian-gpu/
-├── feilian/                    # Core package
-│   ├── __init__.py
-│   ├── neural_network.py       # FeilianNet architecture and training
-│   └── data_formatter.py       # Data preprocessing and metrics
-├── models/                     # Trained model weights
-│   ├── feilian_net_*.pth      # Saved model checkpoints
-├── raw_data/                   # Training data (not included)
-│   ├── pedestrian/            # LES wind speed data (.nc files)
-│   └── topo/                  # Building topology data
-├── feilian_orig.py            # Training script
-├── Feilian-demo.ipynb         # Demonstration notebook
-└── README.md                  # This file
-```
-
 ## Installation
 
 ### Prerequisites
@@ -61,15 +43,13 @@ feilian-gpu/
 - NumPy
 - SciPy
 - scikit-learn
-- netCDF4 (for data loading)
-- pandas (for demo)
-- matplotlib (for visualization)
+- netCDF4
+- pandas
+- matplotlib
 
 ### Setup
 ```bash
 git clone https://github.com/your-username/feilian-gpu.git
-cd feilian-gpu
-pip install -r requirements.txt  # Create requirements.txt as needed
 ```
 
 ## Usage
