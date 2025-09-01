@@ -1,9 +1,40 @@
+"""
+Data Formatter Module for Wind Flow Prediction
+==============================================
+
+This module provides comprehensive data preprocessing and formatting capabilities
+for wind flow simulation data. It handles rotation, scaling, tiling, and metric
+calculation for training deep learning models on wind speed prediction tasks.
+
+Key Features:
+- Multi-directional wind data processing with automatic rotation
+- Flexible input/output formatting for neural networks
+- Comprehensive evaluation metrics (MAE, RMSE, R², relative errors)
+- Train/test splitting with reproducible random seeds
+- Efficient data tiling and restoration for large-scale predictions
+
+Typical Usage:
+    >>> formatter = DataFormatter(raw_data, wind_angles, formatted_shape=1280)
+    >>> x_train, y_train, _, x_test, y_test, _ = formatter.split_train_test_data(0.8)
+    >>> predictions = model(x_test)
+    >>> metrics = formatter.compute_all_metrics(predictions)
+
+Author: Feilian Development Team
+Version: 1.0.0
+"""
+
 import math
+from typing import List, Tuple, Union, Optional, Dict, Any
 
 import numpy as np
 from scipy import ndimage
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 
+# ============================================================================
+# Module Constants
+# ============================================================================
+# Default target resolution for neural network input formatting
+# This represents the square dimension (e.g., 1280x1280) that the network expects
 DEFAULT_FORMAT_SHAPE = 1280
 
 
@@ -213,7 +244,7 @@ def _compute_then_add_metrics(all_metrics, y_true, y_pred):
     """
     all_metrics["r2_score"].append(r2_score(y_true, y_pred))
     all_metrics["mae"].append(mean_absolute_error(y_true, y_pred))
-    all_metrics["rmse"].append(mean_squared_error(y_true, y_pred, squared=False))
+    all_metrics["rmse"].append(mean_squared_error(y_true, y_pred))
     _add_more_metrics(all_metrics, y_true, y_pred)
 
     return all_metrics
@@ -222,11 +253,63 @@ def _compute_then_add_metrics(all_metrics, y_true, y_pred):
 class DataFormatter:
     def __init__(self, raw_data, wind_angles=None, formatted_shape=DEFAULT_FORMAT_SHAPE):
         """
-        Initialize a new instance of DataFormatter.
+        Initialize a new instance of DataFormatter for wind flow data processing.
 
-        :param raw_data: The wind speed and topo data in one 2D matrix. The negative entries correspond to topo.
-        :param wind_angles: The corresponding wind angles of the data, in clockwise direction.
-        :param formatted_shape: The desired x-y shape of the network input.
+        The DataFormatter handles the complex task of converting raw wind simulation data
+        into a format suitable for neural network training. It processes multiple wind
+        directions, handles rotation, and manages data tiling for large-scale predictions.
+
+        Parameters
+        ----------
+        raw_data : list of numpy.ndarray
+            List of 2D arrays containing wind speed and topology data. Each array contains:
+            - Positive values: Wind speed data (m/s or normalized units)
+            - Negative values: Building/terrain topology (height information)
+            - Shape: (height, width) in simulation coordinates
+        
+        wind_angles : list of float, optional
+            Wind directions corresponding to each raw_data array, in degrees (clockwise 
+            from north). If None, all data is treated as 0-degree wind direction.
+            Range: [0, 360) degrees
+        
+        formatted_shape : int, tuple, or list, optional
+            Target resolution for neural network input formatting. Can be:
+            - int: Square resolution (e.g., 1280 -> 1280x1280)
+            - tuple/list of length 1: Square resolution 
+            - tuple/list of length 2: (height, width) resolution
+            Default: 1280 (creates 1280x1280 input patches)
+
+        Attributes
+        ----------
+        raw_data : list of numpy.ndarray
+            Processed raw data arrays (after rotation if wind_angles provided)
+        wind_angles : list of float
+            Wind angles for each data array
+        fmt_shape : tuple of int
+            Target formatting shape as (height, width)
+        
+        Notes
+        -----
+        The formatter automatically handles:
+        - Wind direction rotation (90-degree increments)
+        - Data expansion and padding for seamless tiling
+        - Topology separation (negative values become input channels)
+        - Memory-efficient slice-based processing for large datasets
+
+        Examples
+        --------
+        >>> # Single wind direction
+        >>> formatter = DataFormatter([wind_data], [180.0], 1280)
+        >>> 
+        >>> # Multiple wind directions
+        >>> formatter = DataFormatter(
+        ...     [data_0deg, data_90deg, data_180deg], 
+        ...     [0, 90, 180], 
+        ...     formatted_shape=(1024, 1024)
+        ... )
+        >>> 
+        >>> # No wind rotation (all data at 0 degrees)
+        >>> formatter = DataFormatter([wind_data])
         """
         self.raw_data = raw_data
         self.wind_angles = wind_angles

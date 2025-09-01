@@ -207,3 +207,15 @@ marimo/_lsp/
 __marimo__/
 
 .vscode/
+.output/
+data/
+demo_models/
+docs/
+helper_scripts/
+models/
+test_models/
+test_subset/
+metadata.csv
+WARP.md
+.DS_Store
+raw_data/
