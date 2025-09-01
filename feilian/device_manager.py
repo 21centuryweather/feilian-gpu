@@ -32,7 +32,7 @@ Version: 1.0.0
 import torch
 import logging
 import platform
-from typing import Optional, Tuple, List, Dict, Any, Union
+from typing import Optional
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -47,11 +47,11 @@ class DeviceManager:
     Manages device selection and optimization across different hardware platforms.
     Supports Apple Silicon MPS, NVIDIA CUDA, and CPU fallback.
     """
-    
+
     def __init__(self, device_preference: str = "auto", force_cpu: bool = False):
         """
         Initialize the device manager.
-        
+
         Args:
             device_preference: One of "auto", "mps", "cuda", "cpu"
             force_cpu: Force CPU usage regardless of available hardware
@@ -60,29 +60,29 @@ class DeviceManager:
         self.force_cpu = force_cpu
         self.device = self._select_device()
         self.is_apple_silicon = self._is_apple_silicon()
-        
+
         logger.info(f"Device Manager initialized with device: {self.device}")
         logger.info(f"Platform: {platform.system()} {platform.machine()}")
-        
+
     def _is_apple_silicon(self) -> bool:
         """Check if running on Apple Silicon."""
         return platform.system() == "Darwin" and platform.machine() == "arm64"
-    
+
     def _select_device(self) -> torch.device:
         """
         Select the best available device based on preference and availability.
-        
+
         Returns:
             torch.device: The selected device
         """
         if self.force_cpu:
             logger.info("Forcing CPU usage as requested")
             return torch.device("cpu")
-            
+
         if self.device_preference == "cpu":
             logger.info("CPU selected by preference")
             return torch.device("cpu")
-        
+
         # Check device availability and select based on preference
         if self.device_preference == "auto":
             return self._auto_select_device()
@@ -91,9 +91,11 @@ class DeviceManager:
         elif self.device_preference == "cuda":
             return self._select_cuda()
         else:
-            logger.warning(f"Unknown device preference: {self.device_preference}, falling back to auto")
+            logger.warning(
+                f"Unknown device preference: {self.device_preference}, falling back to auto"
+            )
             return self._auto_select_device()
-    
+
     def _auto_select_device(self) -> torch.device:
         """Automatically select the best available device."""
         # Priority: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
@@ -108,7 +110,7 @@ class DeviceManager:
         else:
             logger.info("Auto-selected CPU (no GPU available)")
             return torch.device("cpu")
-    
+
     def _select_mps(self) -> torch.device:
         """Select MPS device if available."""
         if self._is_mps_available():
@@ -117,7 +119,7 @@ class DeviceManager:
         else:
             logger.warning("MPS requested but not available, falling back to CPU")
             return torch.device("cpu")
-    
+
     def _select_cuda(self) -> torch.device:
         """Select CUDA device if available."""
         if self._is_cuda_available():
@@ -128,15 +130,15 @@ class DeviceManager:
         else:
             logger.warning("CUDA requested but not available, falling back to CPU")
             return torch.device("cpu")
-    
+
     def _is_mps_available(self) -> bool:
         """Check if MPS is available."""
         try:
-            return hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+            return hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
         except Exception as e:
             logger.debug(f"MPS check failed: {e}")
             return False
-    
+
     def _is_cuda_available(self) -> bool:
         """Check if CUDA is available."""
         try:
@@ -144,11 +146,11 @@ class DeviceManager:
         except Exception as e:
             logger.debug(f"CUDA check failed: {e}")
             return False
-    
+
     def get_device_info(self) -> dict:
         """
         Get comprehensive device information.
-        
+
         Returns:
             dict: Device information including type, memory, etc.
         """
@@ -157,85 +159,92 @@ class DeviceManager:
             "device_type": self.device.type,
             "platform": platform.system(),
             "architecture": platform.machine(),
-            "is_apple_silicon": self.is_apple_silicon
+            "is_apple_silicon": self.is_apple_silicon,
         }
-        
+
         if self.device.type == "cuda":
-            info.update({
-                "gpu_count": torch.cuda.device_count(),
-                "gpu_name": torch.cuda.get_device_name(),
-                "cuda_version": torch.version.cuda,
-                "memory_total": f"{torch.cuda.get_device_properties(self.device).total_memory / 1e9:.1f} GB",
-                "memory_allocated": f"{torch.cuda.memory_allocated(self.device) / 1e9:.1f} GB",
-                "memory_reserved": f"{torch.cuda.memory_reserved(self.device) / 1e9:.1f} GB"
-            })
+            info.update(
+                {
+                    "gpu_count": torch.cuda.device_count(),
+                    "gpu_name": torch.cuda.get_device_name(),
+                    "cuda_version": torch.version.cuda,
+                    "memory_total": f"{torch.cuda.get_device_properties(self.device).total_memory / 1e9:.1f} GB",
+                    "memory_allocated": f"{torch.cuda.memory_allocated(self.device) / 1e9:.1f} GB",
+                    "memory_reserved": f"{torch.cuda.memory_reserved(self.device) / 1e9:.1f} GB",
+                }
+            )
         elif self.device.type == "mps":
-            info.update({
-                "mps_available": torch.backends.mps.is_available()
-            })
-        
+            info.update({"mps_available": torch.backends.mps.is_available()})
+
         return info
-    
-    def optimize_model(self, model: torch.nn.Module, use_compile: bool = True) -> torch.nn.Module:
+
+    def optimize_model(
+        self, model: torch.nn.Module, use_compile: bool = True
+    ) -> torch.nn.Module:
         """
         Optimize model for the selected device.
-        
+
         Args:
             model: PyTorch model
             use_compile: Whether to use torch.compile (PyTorch 2.0+)
-            
+
         Returns:
             Optimized model
         """
         # Move model to device
         model = model.to(self.device)
-        
+
         # Apply device-specific optimizations
         if self.device.type == "cuda":
             model = self._optimize_for_cuda(model)
         elif self.device.type == "mps":
             model = self._optimize_for_mps(model)
-        
+
         # Apply torch.compile if available and requested
-        if use_compile and hasattr(torch, 'compile'):
+        if use_compile and hasattr(torch, "compile"):
             try:
                 model = torch.compile(model)
                 logger.info("Model compiled with torch.compile")
             except Exception as e:
                 logger.warning(f"torch.compile failed: {e}")
-        
+
         return model
-    
+
     def _optimize_for_cuda(self, model: torch.nn.Module) -> torch.nn.Module:
         """Apply CUDA-specific optimizations."""
         # Enable mixed precision if supported
-        if hasattr(torch.cuda, 'amp'):
+        if hasattr(torch.cuda, "amp"):
             logger.info("CUDA AMP (Automatic Mixed Precision) available")
-        
+
         # Multi-GPU support
         if torch.cuda.device_count() > 1:
             logger.info(f"Using {torch.cuda.device_count()} GPUs with DataParallel")
             model = torch.nn.DataParallel(model)
-        
+
         return model
-    
+
     def _optimize_for_mps(self, model: torch.nn.Module) -> torch.nn.Module:
         """Apply MPS-specific optimizations."""
         # MPS-specific settings
         logger.info("Optimizing for Apple Silicon MPS")
         return model
-    
-    def create_dataloader(self, dataset, batch_size: int, shuffle: bool = True, 
-                         num_workers: Optional[int] = None) -> torch.utils.data.DataLoader:
+
+    def create_dataloader(
+        self,
+        dataset,
+        batch_size: int,
+        shuffle: bool = True,
+        num_workers: Optional[int] = None,
+    ) -> torch.utils.data.DataLoader:
         """
         Create optimized DataLoader for the device.
-        
+
         Args:
             dataset: PyTorch dataset
             batch_size: Batch size
             shuffle: Whether to shuffle data
             num_workers: Number of worker processes
-            
+
         Returns:
             Optimized DataLoader
         """
@@ -248,64 +257,68 @@ class DeviceManager:
                 num_workers = 2
             else:  # CUDA
                 num_workers = 4
-        
+
         # Pin memory for GPU devices
         pin_memory = self.device.type in ["cuda", "mps"]
-        
+
         dataloader = torch.utils.data.DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=shuffle,
             num_workers=num_workers,
             pin_memory=pin_memory,
-            persistent_workers=num_workers > 0
+            persistent_workers=num_workers > 0,
         )
-        
-        logger.info(f"Created DataLoader with {num_workers} workers, pin_memory={pin_memory}")
+
+        logger.info(
+            f"Created DataLoader with {num_workers} workers, pin_memory={pin_memory}"
+        )
         return dataloader
-    
+
     def move_to_device(self, tensor_or_model):
         """Move tensor or model to the selected device."""
         return tensor_or_model.to(self.device)
-    
+
     def clear_cache(self):
         """Clear device cache to free memory."""
         if self.device.type == "cuda":
             torch.cuda.empty_cache()
             logger.info("CUDA cache cleared")
         elif self.device.type == "mps":
-            if hasattr(torch.mps, 'empty_cache'):
+            if hasattr(torch.mps, "empty_cache"):
                 torch.mps.empty_cache()
                 logger.info("MPS cache cleared")
-    
+
     def print_device_info(self):
         """Print comprehensive device information."""
         info = self.get_device_info()
-        print("\n" + "="*50)
+        print("\n" + "=" * 50)
         print("DEVICE INFORMATION")
-        print("="*50)
-        
+        print("=" * 50)
+
         for key, value in info.items():
             print(f"{key.replace('_', ' ').title()}: {value}")
-        
-        print("="*50)
-        
+
+        print("=" * 50)
+
         # Additional availability info
         print("\nDEVICE AVAILABILITY:")
         print(f"CUDA Available: {self._is_cuda_available()}")
         print(f"MPS Available: {self._is_mps_available()}")
         print(f"CPU Cores: {torch.get_num_threads()}")
-        print("="*50 + "\n")
+        print("=" * 50 + "\n")
 
 
-def get_device_manager(device_preference: str = "auto", force_cpu: bool = False) -> DeviceManager:
+def get_device_manager(
+    device_preference: str = "auto", force_cpu: bool = False
+) -> DeviceManager:
     """
     Factory function to create a DeviceManager instance.
-    
+
     Args:
         device_preference: One of "auto", "mps", "cuda", "cpu"
         force_cpu: Force CPU usage
-        
+
     Returns:
         DeviceManager instance
     """

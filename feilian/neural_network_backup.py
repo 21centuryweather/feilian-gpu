@@ -23,18 +23,28 @@ def predict_with_model(model, x, batch_size=8):
         numpy.ndarray: The predicted output corresponding to the input data.
     """
     y = np.empty(np.shape(x))
-    x_loader = DataLoader(TensorDataset(torch.tensor(x)), batch_size=batch_size, shuffle=False)
+    x_loader = DataLoader(
+        TensorDataset(torch.tensor(x)), batch_size=batch_size, shuffle=False
+    )
     idx = 0
     for (xi,) in x_loader:
         yi = model(xi).cpu().detach()
         n = np.shape(yi)[0]
-        y[idx:(idx + n), :, :, :] = yi
+        y[idx : (idx + n), :, :, :] = yi
         idx += n
     return y
 
 
-def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3,
-                                  criterion=nn.L1Loss(), num_epochs=1000, model_dir=".output/models"):
+def train_network_model_with_adam(
+    model,
+    x_train,
+    y_train,
+    batch_size=8,
+    lr=1e-3,
+    criterion=nn.L1Loss(),
+    num_epochs=1000,
+    model_dir=".output/models",
+):
     """
     Trains a neural network model using the Adam optimizer.
 
@@ -51,7 +61,9 @@ def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3
     Returns:
         torch.nn.Module: The trained neural network model.
     """
-    train_loader, model, device = _init_data_loader_and_model_and_device(model, x_train, y_train, batch_size)
+    train_loader, model, device = _init_data_loader_and_model_and_device(
+        model, x_train, y_train, batch_size
+    )
     optimizer = optim.Adam(model.parameters(), lr=lr)
     model.train()
 
@@ -73,25 +85,35 @@ def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3
 
         avg_train_loss = total_loss / total_numel
         time_elapsed = str(datetime.now() - start_time)[:-3]
-        print(f"[{time_elapsed}] Epoch [{epoch + 1}/{num_epochs}] - Loss: {avg_train_loss:.5f}")
+        print(
+            f"[{time_elapsed}] Epoch [{epoch + 1}/{num_epochs}] - Loss: {avg_train_loss:.5f}"
+        )
         if avg_train_loss > 1e4:
             count += 1
             if count > 20:
-                print(f"Loss is too large, terminating...")
+                print("Loss is too large, terminating...")
                 return model
 
         count = 0
 
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)
-    curr_time = datetime.now().strftime('%Y%m%dT%H:%M:%S')
+    curr_time = datetime.now().strftime("%Y%m%dT%H:%M:%S")
     torch.save(model.state_dict(), f"{model_dir}/feilian_net_{curr_time}.pth")
     return model
 
 
 class FeilianNet(nn.Module):
-    def __init__(self, conv_kernel_size=3, pool_kernel_size=2, max_level=4, chan_multi=16,
-                 activation=nn.PReLU(), data_type=torch.float32, seed=None):
+    def __init__(
+        self,
+        conv_kernel_size=3,
+        pool_kernel_size=2,
+        max_level=4,
+        chan_multi=16,
+        activation=nn.PReLU(),
+        data_type=torch.float32,
+        seed=None,
+    ):
         """
         Initializes the FeilianNet neural network.
 
@@ -116,8 +138,15 @@ class FeilianNet(nn.Module):
             expand_layers (nn.ModuleList): List of expansion layers.
         """
         super(FeilianNet, self).__init__()
-        self.conv_kernel_size, self.pool_kernel_size = conv_kernel_size, pool_kernel_size
-        self.max_level, self.data_type, self.chan_multi = max_level, data_type, chan_multi
+        self.conv_kernel_size, self.pool_kernel_size = (
+            conv_kernel_size,
+            pool_kernel_size,
+        )
+        self.max_level, self.data_type, self.chan_multi = (
+            max_level,
+            data_type,
+            chan_multi,
+        )
         self.activation = activation
 
         self.compress_layers = nn.ModuleList()
@@ -128,10 +157,20 @@ class FeilianNet(nn.Module):
         if seed:
             torch.manual_seed(seed)
         for level in range(max_level):
-            self.compress_layers.append(CompressionLayer(level, chan_multi, pool_kernel_size, activation, convargs))
-        self.switch_layer = SwitchLayer(max_level, chan_multi, pool_kernel_size, activation, convargs)
+            self.compress_layers.append(
+                CompressionLayer(
+                    level, chan_multi, pool_kernel_size, activation, convargs
+                )
+            )
+        self.switch_layer = SwitchLayer(
+            max_level, chan_multi, pool_kernel_size, activation, convargs
+        )
         for level in range(max_level - 1, -1, -1):
-            self.expand_layers.append(ExpansionLayer(level, chan_multi, pool_kernel_size, activation, convargs))
+            self.expand_layers.append(
+                ExpansionLayer(
+                    level, chan_multi, pool_kernel_size, activation, convargs
+                )
+            )
 
     def forward(self, x):
         """
@@ -156,7 +195,7 @@ class FeilianNet(nn.Module):
         """
         Count the number of trainable parameters in the neural network.
 
-        This method iterates through the layers of the neural network and sums up 
+        This method iterates through the layers of the neural network and sums up
         the number of parameters that require gradients (i.e., trainable parameters).
 
         Returns:
@@ -165,7 +204,9 @@ class FeilianNet(nn.Module):
         nparams = 0
         for layer in self.compress_layers:
             nparams += sum(p.numel() for p in layer.parameters() if p.requires_grad)
-        nparams += sum(p.numel() for p in self.switch_layer.parameters() if p.requires_grad)
+        nparams += sum(
+            p.numel() for p in self.switch_layer.parameters() if p.requires_grad
+        )
         for layer in self.expand_layers:
             nparams += sum(p.numel() for p in layer.parameters() if p.requires_grad)
         return nparams
@@ -185,10 +226,16 @@ class CompressionLayer(nn.Module):
 
         """
         super(CompressionLayer, self).__init__()
-        self.layer = nn.Sequential() if level == 0 else nn.Sequential(nn.MaxPool2d(pool_kernel_size))
+        self.layer = (
+            nn.Sequential()
+            if level == 0
+            else nn.Sequential(nn.MaxPool2d(pool_kernel_size))
+        )
         prev_chan = 1 if level == 0 else chan_multi * 2 ** (level - 1)
-        curr_chan = chan_multi * 2 ** level
-        self.layer.extend(_double_conv_layers(prev_chan, curr_chan, convargs, activation))
+        curr_chan = chan_multi * 2**level
+        self.layer.extend(
+            _double_conv_layers(prev_chan, curr_chan, convargs, activation)
+        )
 
     def forward(self, x):
         return self.layer(x)
@@ -196,23 +243,28 @@ class CompressionLayer(nn.Module):
 
 class SwitchLayer(nn.Module):
     """
-        Initializes the SwitchLayer.
+    Initializes the SwitchLayer.
 
-        Args:
-            max_level (int): The maximum level of the neural network.
-            chan_multi (int): The channel multiplier.
-            pool_kernel_size (int or tuple): The size of the kernel for the max pooling layer.
-            activation (callable): The activation function to use.
-            convargs (dict): Additional arguments for the convolutional layers.
+    Args:
+        max_level (int): The maximum level of the neural network.
+        chan_multi (int): The channel multiplier.
+        pool_kernel_size (int or tuple): The size of the kernel for the max pooling layer.
+        activation (callable): The activation function to use.
+        convargs (dict): Additional arguments for the convolutional layers.
 
     """
+
     def __init__(self, max_level, chan_multi, pool_kernel_size, activation, convargs):
         super(SwitchLayer, self).__init__()
         prev_chan = next_chan = chan_multi * 2 ** (max_level - 1)
-        curr_chan = chan_multi * 2 ** max_level
-        self.layer = nn.Sequential(nn.MaxPool2d(pool_kernel_size),
-                                   *_double_conv_layers(prev_chan, curr_chan, convargs, activation),
-                                   nn.ConvTranspose2d(curr_chan, next_chan, stride=pool_kernel_size, **convargs))
+        curr_chan = chan_multi * 2**max_level
+        self.layer = nn.Sequential(
+            nn.MaxPool2d(pool_kernel_size),
+            *_double_conv_layers(prev_chan, curr_chan, convargs, activation),
+            nn.ConvTranspose2d(
+                curr_chan, next_chan, stride=pool_kernel_size, **convargs
+            ),
+        )
 
     def forward(self, x):
         return self.layer(x)
@@ -232,13 +284,19 @@ class ExpansionLayer(nn.Module):
 
         """
         super(ExpansionLayer, self).__init__()
-        curr_chan = chan_multi * 2 ** level
+        curr_chan = chan_multi * 2**level
         next_chan = chan_multi * 2 ** (level - 1)
-        self.layer = nn.Sequential(*_double_conv_layers(2 * curr_chan, curr_chan, convargs, activation))
+        self.layer = nn.Sequential(
+            *_double_conv_layers(2 * curr_chan, curr_chan, convargs, activation)
+        )
         if level == 0:
             self.layer.append(nn.Conv2d(curr_chan, 1, 1, dtype=convargs["dtype"]))
         else:
-            self.layer.append(nn.ConvTranspose2d(curr_chan, next_chan, stride=pool_kernel_size, **convargs))
+            self.layer.append(
+                nn.ConvTranspose2d(
+                    curr_chan, next_chan, stride=pool_kernel_size, **convargs
+                )
+            )
 
     def forward(self, x0, x1):
         """
@@ -303,12 +361,17 @@ def _double_conv_layers(prev_chan, curr_chan, convargs, activation):
             - BatchNorm2d layer
             - Activation function
     """
+
     def act():
         if isinstance(activation, nn.PReLU):
             return nn.PReLU(curr_chan)
         return activation
 
-    return [nn.Conv2d(prev_chan, curr_chan, padding="same", bias=False, **convargs),
-            nn.BatchNorm2d(curr_chan), act(),
-            nn.Conv2d(curr_chan, curr_chan, padding="same", bias=False, **convargs),
-            nn.BatchNorm2d(curr_chan), act()]
+    return [
+        nn.Conv2d(prev_chan, curr_chan, padding="same", bias=False, **convargs),
+        nn.BatchNorm2d(curr_chan),
+        act(),
+        nn.Conv2d(curr_chan, curr_chan, padding="same", bias=False, **convargs),
+        nn.BatchNorm2d(curr_chan),
+        act(),
+    ]

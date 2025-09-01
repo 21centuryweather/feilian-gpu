@@ -22,7 +22,7 @@ Architecture Features:
 Typical Usage:
     >>> model = FeilianNet(chan_multi=20, max_level=6, activation=nn.ReLU(True))
     >>> model = train_network_model_with_adam(
-    ...     model, x_train, y_train, 
+    ...     model, x_train, y_train,
     ...     device_preference="auto",
     ...     use_mixed_precision=True
     ... )
@@ -35,7 +35,6 @@ Version: 1.0.0
 import os
 from datetime import datetime
 import warnings
-from typing import Optional, Union, Tuple, Any
 
 import numpy as np
 import torch
@@ -43,7 +42,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
 from torch.nn.parallel import DataParallel
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import TensorDataset
 
 from .device_manager import DeviceManager
 
@@ -67,35 +66,45 @@ def predict_with_model(model, x, batch_size=8, device_manager=None):
     """
     if device_manager is None:
         from .device_manager import get_device_manager
+
         device_manager = get_device_manager()
-    
+
     device = device_manager.device
     model = model.to(device)
     model.eval()
-    
+
     y = np.empty(np.shape(x))
-    
+
     # Create dataset and dataloader
     dataset = TensorDataset(torch.tensor(x, dtype=torch.float32))
     x_loader = device_manager.create_dataloader(dataset, batch_size, shuffle=False)
-    
+
     idx = 0
     with torch.no_grad():
         for (xi,) in x_loader:
             xi = xi.to(device)
             yi = model(xi).cpu().detach()
             n = np.shape(yi)[0]
-            y[idx:(idx + n), :, :, :] = yi.numpy()
+            y[idx : (idx + n), :, :, :] = yi.numpy()
             idx += n
-    
+
     return y
 
 
-def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3,
-                                  criterion=nn.L1Loss(), num_epochs=10, 
-                                  model_dir=".output/models", device_preference="auto",
-                                  use_mixed_precision=True, save_checkpoints=True,
-                                  checkpoint_interval=50):
+def train_network_model_with_adam(
+    model,
+    x_train,
+    y_train,
+    batch_size=8,
+    lr=1e-3,
+    criterion=nn.L1Loss(),
+    num_epochs=10,
+    model_dir=".output/models",
+    device_preference="auto",
+    use_mixed_precision=True,
+    save_checkpoints=True,
+    checkpoint_interval=50,
+):
     """
     Trains a neural network model using the Adam optimizer with enhanced GPU support.
 
@@ -120,49 +129,52 @@ def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3
     device_manager = DeviceManager(device_preference)
     device = device_manager.device
     device_manager.print_device_info()
-    
+
     # Prepare data
     if isinstance(x_train, np.ndarray):
         x_train = torch.tensor(x_train, dtype=torch.float32)
     if isinstance(y_train, np.ndarray):
         y_train = torch.tensor(y_train, dtype=torch.float32)
-    
+
     # Create dataset and dataloader
     dataset = TensorDataset(x_train, y_train)
     train_loader = device_manager.create_dataloader(dataset, batch_size, shuffle=True)
-    
+
     # Optimize model for device
-    model = device_manager.optimize_model(model, use_compile=False)  # Disable compile for stability
-    
+    model = device_manager.optimize_model(
+        model, use_compile=False
+    )  # Disable compile for stability
+
     # Setup optimizer
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    
+
     # Setup mixed precision training for CUDA
     scaler = None
     if use_mixed_precision and device.type == "cuda":
         try:
             from torch.cuda.amp import GradScaler, autocast
+
             scaler = GradScaler()
             print("Using mixed precision training with CUDA AMP")
         except ImportError:
             print("Mixed precision not available, using standard training")
-    
+
     model.train()
     start_time = datetime.now()
     count = 0
-    best_loss = float('inf')
-    
+    best_loss = float("inf")
+
     # Create model directory
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)
-    
+
     for epoch in range(num_epochs):
         total_loss, total_numel = 0.0, 0
-        
+
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
-            
+
             # Forward pass with optional mixed precision
             if scaler is not None:
                 with autocast():
@@ -174,59 +186,67 @@ def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3
                 loss = criterion(model(x), y)
                 loss.backward()
                 optimizer.step()
-            
+
             curr_numel = y.numel()
             total_loss += loss.item() * curr_numel
             total_numel += curr_numel
-        
+
         avg_train_loss = total_loss / total_numel
         time_elapsed = str(datetime.now() - start_time)[:-3]
-        print(f"[{time_elapsed}] Epoch [{epoch + 1}/{num_epochs}] - Loss: {avg_train_loss:.5f}")
-        
+        print(
+            f"[{time_elapsed}] Epoch [{epoch + 1}/{num_epochs}] - Loss: {avg_train_loss:.5f}"
+        )
+
         # Early stopping for diverging loss
         if avg_train_loss > 1e4:
             count += 1
             if count > 20:
-                print(f"Loss is too large, terminating...")
+                print("Loss is too large, terminating...")
                 break
         else:
             count = 0
-        
+
         # Save checkpoint
         if save_checkpoints and (epoch + 1) % checkpoint_interval == 0:
-            checkpoint_path = f"{model_dir}/checkpoint_epoch_{epoch+1}.pth"
-            save_checkpoint(model, optimizer, epoch + 1, avg_train_loss, checkpoint_path)
-        
+            checkpoint_path = f"{model_dir}/checkpoint_epoch_{epoch + 1}.pth"
+            save_checkpoint(
+                model, optimizer, epoch + 1, avg_train_loss, checkpoint_path
+            )
+
         # Save best model
         if avg_train_loss < best_loss:
             best_loss = avg_train_loss
             best_model_path = f"{model_dir}/best_model.pth"
             save_model_state(model, best_model_path)
-        
+
         # Clear cache periodically
         if (epoch + 1) % 100 == 0:
             device_manager.clear_cache()
-    
+
     # Save final model
-    curr_time = datetime.now().strftime('%Y%m%dT%H:%M:%S')
+    curr_time = datetime.now().strftime("%Y%m%dT%H:%M:%S")
     final_model_path = f"{model_dir}/feilian_net_{curr_time}.pth"
     save_model_state(model, final_model_path)
     print(f"Model saved to {final_model_path}")
-    
+
     return model
 
 
 def save_checkpoint(model, optimizer, epoch, loss, path):
     """Save training checkpoint."""
     # Handle DataParallel models
-    model_state = model.module.state_dict() if isinstance(model, DataParallel) else model.state_dict()
-    
+    model_state = (
+        model.module.state_dict()
+        if isinstance(model, DataParallel)
+        else model.state_dict()
+    )
+
     checkpoint = {
-        'epoch': epoch,
-        'model_state_dict': model_state,
-        'optimizer_state_dict': optimizer.state_dict(),
-        'loss': loss,
-        'timestamp': datetime.now().isoformat()
+        "epoch": epoch,
+        "model_state_dict": model_state,
+        "optimizer_state_dict": optimizer.state_dict(),
+        "loss": loss,
+        "timestamp": datetime.now().isoformat(),
     }
     torch.save(checkpoint, path)
     print(f"Checkpoint saved: {path}")
@@ -235,22 +255,34 @@ def save_checkpoint(model, optimizer, epoch, loss, path):
 def save_model_state(model, path):
     """Save only model state dict."""
     # Handle DataParallel models
-    model_state = model.module.state_dict() if isinstance(model, DataParallel) else model.state_dict()
+    model_state = (
+        model.module.state_dict()
+        if isinstance(model, DataParallel)
+        else model.state_dict()
+    )
     torch.save(model_state, path)
 
 
 def load_checkpoint(model, optimizer, path):
     """Load training checkpoint."""
-    checkpoint = torch.load(path, map_location='cpu')
-    model.load_state_dict(checkpoint['model_state_dict'])
+    checkpoint = torch.load(path, map_location="cpu")
+    model.load_state_dict(checkpoint["model_state_dict"])
     if optimizer:
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    return checkpoint.get('epoch', 0), checkpoint.get('loss', 0)
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    return checkpoint.get("epoch", 0), checkpoint.get("loss", 0)
 
 
 class FeilianNet(nn.Module):
-    def __init__(self, conv_kernel_size=3, pool_kernel_size=2, max_level=4, chan_multi=16,
-                 activation=nn.PReLU(), data_type=torch.float32, seed=None):
+    def __init__(
+        self,
+        conv_kernel_size=3,
+        pool_kernel_size=2,
+        max_level=4,
+        chan_multi=16,
+        activation=nn.PReLU(),
+        data_type=torch.float32,
+        seed=None,
+    ):
         """
         Initializes the FeilianNet neural network.
 
@@ -275,8 +307,15 @@ class FeilianNet(nn.Module):
             expand_layers (nn.ModuleList): List of expansion layers.
         """
         super(FeilianNet, self).__init__()
-        self.conv_kernel_size, self.pool_kernel_size = conv_kernel_size, pool_kernel_size
-        self.max_level, self.data_type, self.chan_multi = max_level, data_type, chan_multi
+        self.conv_kernel_size, self.pool_kernel_size = (
+            conv_kernel_size,
+            pool_kernel_size,
+        )
+        self.max_level, self.data_type, self.chan_multi = (
+            max_level,
+            data_type,
+            chan_multi,
+        )
         self.activation = activation
 
         self.compress_layers = nn.ModuleList()
@@ -287,10 +326,20 @@ class FeilianNet(nn.Module):
         if seed:
             torch.manual_seed(seed)
         for level in range(max_level):
-            self.compress_layers.append(CompressionLayer(level, chan_multi, pool_kernel_size, activation, convargs))
-        self.switch_layer = SwitchLayer(max_level, chan_multi, pool_kernel_size, activation, convargs)
+            self.compress_layers.append(
+                CompressionLayer(
+                    level, chan_multi, pool_kernel_size, activation, convargs
+                )
+            )
+        self.switch_layer = SwitchLayer(
+            max_level, chan_multi, pool_kernel_size, activation, convargs
+        )
         for level in range(max_level - 1, -1, -1):
-            self.expand_layers.append(ExpansionLayer(level, chan_multi, pool_kernel_size, activation, convargs))
+            self.expand_layers.append(
+                ExpansionLayer(
+                    level, chan_multi, pool_kernel_size, activation, convargs
+                )
+            )
 
     def forward(self, x):
         """
@@ -315,7 +364,7 @@ class FeilianNet(nn.Module):
         """
         Count the number of trainable parameters in the neural network.
 
-        This method iterates through the layers of the neural network and sums up 
+        This method iterates through the layers of the neural network and sums up
         the number of parameters that require gradients (i.e., trainable parameters).
 
         Returns:
@@ -324,7 +373,9 @@ class FeilianNet(nn.Module):
         nparams = 0
         for layer in self.compress_layers:
             nparams += sum(p.numel() for p in layer.parameters() if p.requires_grad)
-        nparams += sum(p.numel() for p in self.switch_layer.parameters() if p.requires_grad)
+        nparams += sum(
+            p.numel() for p in self.switch_layer.parameters() if p.requires_grad
+        )
         for layer in self.expand_layers:
             nparams += sum(p.numel() for p in layer.parameters() if p.requires_grad)
         return nparams
@@ -344,10 +395,16 @@ class CompressionLayer(nn.Module):
 
         """
         super(CompressionLayer, self).__init__()
-        self.layer = nn.Sequential() if level == 0 else nn.Sequential(nn.MaxPool2d(pool_kernel_size))
+        self.layer = (
+            nn.Sequential()
+            if level == 0
+            else nn.Sequential(nn.MaxPool2d(pool_kernel_size))
+        )
         prev_chan = 1 if level == 0 else chan_multi * 2 ** (level - 1)
-        curr_chan = chan_multi * 2 ** level
-        self.layer.extend(_double_conv_layers(prev_chan, curr_chan, convargs, activation))
+        curr_chan = chan_multi * 2**level
+        self.layer.extend(
+            _double_conv_layers(prev_chan, curr_chan, convargs, activation)
+        )
 
     def forward(self, x):
         return self.layer(x)
@@ -355,23 +412,28 @@ class CompressionLayer(nn.Module):
 
 class SwitchLayer(nn.Module):
     """
-        Initializes the SwitchLayer.
+    Initializes the SwitchLayer.
 
-        Args:
-            max_level (int): The maximum level of the neural network.
-            chan_multi (int): The channel multiplier.
-            pool_kernel_size (int or tuple): The size of the kernel for the max pooling layer.
-            activation (callable): The activation function to use.
-            convargs (dict): Additional arguments for the convolutional layers.
+    Args:
+        max_level (int): The maximum level of the neural network.
+        chan_multi (int): The channel multiplier.
+        pool_kernel_size (int or tuple): The size of the kernel for the max pooling layer.
+        activation (callable): The activation function to use.
+        convargs (dict): Additional arguments for the convolutional layers.
 
     """
+
     def __init__(self, max_level, chan_multi, pool_kernel_size, activation, convargs):
         super(SwitchLayer, self).__init__()
         prev_chan = next_chan = chan_multi * 2 ** (max_level - 1)
-        curr_chan = chan_multi * 2 ** max_level
-        self.layer = nn.Sequential(nn.MaxPool2d(pool_kernel_size),
-                                   *_double_conv_layers(prev_chan, curr_chan, convargs, activation),
-                                   nn.ConvTranspose2d(curr_chan, next_chan, stride=pool_kernel_size, **convargs))
+        curr_chan = chan_multi * 2**max_level
+        self.layer = nn.Sequential(
+            nn.MaxPool2d(pool_kernel_size),
+            *_double_conv_layers(prev_chan, curr_chan, convargs, activation),
+            nn.ConvTranspose2d(
+                curr_chan, next_chan, stride=pool_kernel_size, **convargs
+            ),
+        )
 
     def forward(self, x):
         return self.layer(x)
@@ -391,13 +453,19 @@ class ExpansionLayer(nn.Module):
 
         """
         super(ExpansionLayer, self).__init__()
-        curr_chan = chan_multi * 2 ** level
+        curr_chan = chan_multi * 2**level
         next_chan = chan_multi * 2 ** (level - 1)
-        self.layer = nn.Sequential(*_double_conv_layers(2 * curr_chan, curr_chan, convargs, activation))
+        self.layer = nn.Sequential(
+            *_double_conv_layers(2 * curr_chan, curr_chan, convargs, activation)
+        )
         if level == 0:
             self.layer.append(nn.Conv2d(curr_chan, 1, 1, dtype=convargs["dtype"]))
         else:
-            self.layer.append(nn.ConvTranspose2d(curr_chan, next_chan, stride=pool_kernel_size, **convargs))
+            self.layer.append(
+                nn.ConvTranspose2d(
+                    curr_chan, next_chan, stride=pool_kernel_size, **convargs
+                )
+            )
 
     def forward(self, x0, x1):
         """
@@ -436,19 +504,26 @@ def _double_conv_layers(prev_chan, curr_chan, convargs, activation):
             - BatchNorm2d layer
             - Activation function
     """
+
     def act():
         if isinstance(activation, nn.PReLU):
             return nn.PReLU(curr_chan)
         return activation
 
-    return [nn.Conv2d(prev_chan, curr_chan, padding="same", bias=False, **convargs),
-            nn.BatchNorm2d(curr_chan), act(),
-            nn.Conv2d(curr_chan, curr_chan, padding="same", bias=False, **convargs),
-            nn.BatchNorm2d(curr_chan), act()]
+    return [
+        nn.Conv2d(prev_chan, curr_chan, padding="same", bias=False, **convargs),
+        nn.BatchNorm2d(curr_chan),
+        act(),
+        nn.Conv2d(curr_chan, curr_chan, padding="same", bias=False, **convargs),
+        nn.BatchNorm2d(curr_chan),
+        act(),
+    ]
 
 
 # Legacy function for backward compatibility
-def _init_data_loader_and_model_and_device(model, x_train, y_train, batch_size, device_preference="auto"):
+def _init_data_loader_and_model_and_device(
+    model, x_train, y_train, batch_size, device_preference="auto"
+):
     """
     Legacy function - use DeviceManager directly for new code.
     Initializes the data loader, model, and device for training.
@@ -466,18 +541,21 @@ def _init_data_loader_and_model_and_device(model, x_train, y_train, batch_size, 
             - model (torch.nn.Module): The model moved to the appropriate device.
             - device (torch.device): The device (CPU or GPU) on which the model is located.
     """
-    warnings.warn("_init_data_loader_and_model_and_device is deprecated. Use DeviceManager directly.", 
-                  DeprecationWarning, stacklevel=2)
-    
+    warnings.warn(
+        "_init_data_loader_and_model_and_device is deprecated. Use DeviceManager directly.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     device_manager = DeviceManager(device_preference)
-    
+
     if isinstance(x_train, np.ndarray):
         x_train = torch.tensor(x_train, dtype=torch.float32)
     if isinstance(y_train, np.ndarray):
         y_train = torch.tensor(y_train, dtype=torch.float32)
-    
+
     dataset = TensorDataset(x_train, y_train)
     train_loader = device_manager.create_dataloader(dataset, batch_size, shuffle=True)
     model = device_manager.optimize_model(model)
-    
+
     return train_loader, model, device_manager.device

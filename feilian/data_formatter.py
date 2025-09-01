@@ -24,7 +24,6 @@ Version: 1.0.0
 """
 
 import math
-from typing import List, Tuple, Union, Optional, Dict, Any
 
 import numpy as np
 from scipy import ndimage
@@ -43,18 +42,18 @@ def _find_formatted_shape(fmt_shape):
     Determines the formatted shape based on the input.
 
     Args:
-        fmt_shape (int, tuple, or list): The input shape which can be an integer, 
-                                         a tuple, or a list. If it is an integer, 
-                                         it is assumed to be both dimensions of the shape. 
-                                         If it is a tuple or list, it can either have one 
-                                         element (assumed to be both dimensions) or two 
+        fmt_shape (int, tuple, or list): The input shape which can be an integer,
+                                         a tuple, or a list. If it is an integer,
+                                         it is assumed to be both dimensions of the shape.
+                                         If it is a tuple or list, it can either have one
+                                         element (assumed to be both dimensions) or two
                                          elements (representing the two dimensions).
 
     Returns:
         tuple: A tuple containing two integers representing the formatted shape.
 
     Notes:
-        If the input is not an integer, tuple, or list, the function returns a default 
+        If the input is not an integer, tuple, or list, the function returns a default
         shape defined by DEFAULT_FORMAT_SHAPE.
     """
     if isinstance(fmt_shape, int):
@@ -141,7 +140,9 @@ def _compute_expanded_shape_and_rotated_blocks(data, alpha, fmt_shape):
     nm, nn = math.ceil(tm / dm), math.ceil(tn / dn)
     ralpha = np.deg2rad(alpha)
     r = np.array([[np.cos(ralpha), np.sin(ralpha)], [np.sin(ralpha), np.cos(ralpha)]])
-    rr = np.array([[np.cos(-ralpha), -np.sin(-ralpha)], [np.sin(-ralpha), np.cos(-ralpha)]])
+    rr = np.array(
+        [[np.cos(-ralpha), -np.sin(-ralpha)], [np.sin(-ralpha), np.cos(-ralpha)]]
+    )
     dpoint1, dpoint2 = [-dn // 2, dm // 2], [dn - dn // 2, dm // 2]
     while True:
         am, an = np.int32(np.round(np.dot(r, np.array([nm * dm, nn * dn]))))
@@ -149,7 +150,10 @@ def _compute_expanded_shape_and_rotated_blocks(data, alpha, fmt_shape):
         x1, x2, y1, y2 = efn // 2, efn - efn // 2, efm // 2, efm - efm // 2
         points = np.array([[-x1, -x1, x2], [-y2, y1, y1]])
         rpoints = np.dot(rr, points)
-        leftok, rightok = _is_point_below_line(dpoint1, rpoints[:, 0:2]), _is_point_below_line(dpoint2, rpoints[:, 1:3])
+        leftok, rightok = (
+            _is_point_below_line(dpoint1, rpoints[:, 0:2]),
+            _is_point_below_line(dpoint2, rpoints[:, 1:3]),
+        )
         if leftok and rightok:
             break
         if not leftok:
@@ -181,9 +185,20 @@ def _init_all_metrics():
               - "abs_std_diff": Absolute Standard Deviation Difference
               - "rel_std_diff": Relative Standard Deviation Difference
     """
-    all_metrics = {"mae": [], "rmse": [], "r2_score": [], "rel_l2_error": [],
-                   "true_mean": [], "pred_mean": [], "abs_mean_diff": [], "rel_mean_diff": [],
-                   "true_std": [], "pred_std": [],  "abs_std_diff": [], "rel_std_diff": []}
+    all_metrics = {
+        "mae": [],
+        "rmse": [],
+        "r2_score": [],
+        "rel_l2_error": [],
+        "true_mean": [],
+        "pred_mean": [],
+        "abs_mean_diff": [],
+        "rel_mean_diff": [],
+        "true_std": [],
+        "pred_std": [],
+        "abs_std_diff": [],
+        "rel_std_diff": [],
+    }
     return all_metrics
 
 
@@ -208,7 +223,9 @@ def _add_more_metrics(all_metrics, y_true, y_pred):
     - pred_std: Standard deviation of the predicted values.
     """
     y_true, y_pred = np.array(y_true), np.array(y_pred)
-    all_metrics["rel_l2_error"].append(np.linalg.norm(y_true - y_pred) / np.linalg.norm(y_true))
+    all_metrics["rel_l2_error"].append(
+        np.linalg.norm(y_true - y_pred) / np.linalg.norm(y_true)
+    )
     y_true_mean, y_pred_mean = np.mean(y_true), np.mean(y_pred)
     abs_mean_diff = np.abs(y_true_mean - y_pred_mean)
     rel_mean_diff = abs_mean_diff / y_true_mean
@@ -251,7 +268,9 @@ def _compute_then_add_metrics(all_metrics, y_true, y_pred):
 
 
 class DataFormatter:
-    def __init__(self, raw_data, wind_angles=None, formatted_shape=DEFAULT_FORMAT_SHAPE):
+    def __init__(
+        self, raw_data, wind_angles=None, formatted_shape=DEFAULT_FORMAT_SHAPE
+    ):
         """
         Initialize a new instance of DataFormatter for wind flow data processing.
 
@@ -266,16 +285,16 @@ class DataFormatter:
             - Positive values: Wind speed data (m/s or normalized units)
             - Negative values: Building/terrain topology (height information)
             - Shape: (height, width) in simulation coordinates
-        
+
         wind_angles : list of float, optional
-            Wind directions corresponding to each raw_data array, in degrees (clockwise 
+            Wind directions corresponding to each raw_data array, in degrees (clockwise
             from north). If None, all data is treated as 0-degree wind direction.
             Range: [0, 360) degrees
-        
+
         formatted_shape : int, tuple, or list, optional
             Target resolution for neural network input formatting. Can be:
             - int: Square resolution (e.g., 1280 -> 1280x1280)
-            - tuple/list of length 1: Square resolution 
+            - tuple/list of length 1: Square resolution
             - tuple/list of length 2: (height, width) resolution
             Default: 1280 (creates 1280x1280 input patches)
 
@@ -287,7 +306,7 @@ class DataFormatter:
             Wind angles for each data array
         fmt_shape : tuple of int
             Target formatting shape as (height, width)
-        
+
         Notes
         -----
         The formatter automatically handles:
@@ -300,14 +319,14 @@ class DataFormatter:
         --------
         >>> # Single wind direction
         >>> formatter = DataFormatter([wind_data], [180.0], 1280)
-        >>> 
+        >>>
         >>> # Multiple wind directions
         >>> formatter = DataFormatter(
-        ...     [data_0deg, data_90deg, data_180deg], 
-        ...     [0, 90, 180], 
+        ...     [data_0deg, data_90deg, data_180deg],
+        ...     [0, 90, 180],
         ...     formatted_shape=(1024, 1024)
         ... )
-        >>> 
+        >>>
         >>> # No wind rotation (all data at 0 degrees)
         >>> formatter = DataFormatter([wind_data])
         """
@@ -332,7 +351,9 @@ class DataFormatter:
     def get_formatted_output_data(self):
         return self._fmt_output_data
 
-    def restore_raw_output_data(self, formatted_output, raw_data_indices=None, fill_value=0):
+    def restore_raw_output_data(
+        self, formatted_output, raw_data_indices=None, fill_value=0
+    ):
         """
         Restore the raw output data from the formatted output data.
 
@@ -348,13 +369,16 @@ class DataFormatter:
         AssertionError: If the shape of the formatted output data does not match the expected shape.
         """
         if not raw_data_indices:
-            assert np.shape(self._fmt_input_data) == np.shape(formatted_output), 'data shape must match'
+            assert np.shape(self._fmt_input_data) == np.shape(formatted_output), (
+                "data shape must match"
+            )
 
             raw_output = []
             for raw_idx in range(len(self.raw_data)):
                 slice_start_idx = self._slice_indices[raw_idx].start
-                single_output = self._restore_single_raw_output_data_from_slices(raw_idx, formatted_output,
-                                                                                 slice_start_idx, fill_value)
+                single_output = self._restore_single_raw_output_data_from_slices(
+                    raw_idx, formatted_output, slice_start_idx, fill_value
+                )
                 raw_output.append(single_output)
             return raw_output
 
@@ -362,13 +386,16 @@ class DataFormatter:
         for idx in raw_data_indices:
             nslices += len(self._slice_indices[idx])
         fm, fn = self.fmt_shape
-        assert (nslices, 1, fm, fn) == np.shape(formatted_output), 'data shape must match'
+        assert (nslices, 1, fm, fn) == np.shape(formatted_output), (
+            "data shape must match"
+        )
 
         raw_output = []
         slice_start_idx = 0
         for raw_idx in raw_data_indices:
-            single_output = self._restore_single_raw_output_data_from_slices(raw_idx, formatted_output,
-                                                                             slice_start_idx, fill_value)
+            single_output = self._restore_single_raw_output_data_from_slices(
+                raw_idx, formatted_output, slice_start_idx, fill_value
+            )
             raw_output.append(single_output)
             slice_start_idx += len(self._slice_indices[raw_idx])
         return raw_output
@@ -379,7 +406,7 @@ class DataFormatter:
 
         Args:
             formatted_output (list or array-like): The formatted output data that needs to be evaluated.
-            raw_data_indices (list or array-like, optional): Indices of the raw data to be used for evaluation. 
+            raw_data_indices (list or array-like, optional): Indices of the raw data to be used for evaluation.
             If None, all raw data will be used.
 
         Returns:
@@ -390,13 +417,15 @@ class DataFormatter:
             - If raw_data_indices is not provided, it defaults to using the entire raw data.
             - Metrics are computed for each pair of truth and predicted values, and then aggregated.
         """
-        predicted_output = self.restore_raw_output_data(formatted_output, raw_data_indices)
+        predicted_output = self.restore_raw_output_data(
+            formatted_output, raw_data_indices
+        )
         if not raw_data_indices:
             raw_data_indices = range(len(self.raw_data))
 
         truth_all, pred_all = [], []
         all_metrics = _init_all_metrics()
-        for (pidx, tidx) in enumerate(raw_data_indices):
+        for pidx, tidx in enumerate(raw_data_indices):
             num_idx = self.raw_data[tidx] >= 0
             truth, pred = self.raw_data[tidx][num_idx], predicted_output[pidx][num_idx]
             _compute_then_add_metrics(all_metrics, truth, pred)
@@ -427,14 +456,23 @@ class DataFormatter:
             np.random.seed(seed)
         indices = [i for i in range(len(self.raw_data))]
         np.random.shuffle(indices)
-        raw_train_idx, raw_test_idx = sorted(indices[:split_idx]), sorted(indices[split_idx:])
+        raw_train_idx, raw_test_idx = (
+            sorted(indices[:split_idx]),
+            sorted(indices[split_idx:]),
+        )
         fmt_train_idx, fmt_test_idx = [], []
         for raw_idx in raw_train_idx:
             fmt_train_idx.extend(self._slice_indices[raw_idx])
         for raw_idx in raw_test_idx:
             fmt_test_idx.extend(self._slice_indices[raw_idx])
-        x_train, y_train = self._fmt_input_data[fmt_train_idx, :, :, :], self._fmt_output_data[fmt_train_idx, :, :, :]
-        x_test, y_test = self._fmt_input_data[fmt_test_idx, :, :, :], self._fmt_output_data[fmt_test_idx, :, :, :]
+        x_train, y_train = (
+            self._fmt_input_data[fmt_train_idx, :, :, :],
+            self._fmt_output_data[fmt_train_idx, :, :, :],
+        )
+        x_test, y_test = (
+            self._fmt_input_data[fmt_test_idx, :, :, :],
+            self._fmt_output_data[fmt_test_idx, :, :, :],
+        )
         return x_train, y_train, raw_train_idx, x_test, y_test, raw_test_idx
 
     def _process_raw_data_by_wind_angles(self, raw_data, wind_angles):
@@ -443,7 +481,7 @@ class DataFormatter:
 
         Parameters:
         raw_data (list): List of raw data images.
-        wind_angles (list or None): List of wind angles corresponding to each image in raw_data. 
+        wind_angles (list or None): List of wind angles corresponding to each image in raw_data.
                                     If None, all wind angles are set to 0.
 
         Raises:
@@ -460,12 +498,16 @@ class DataFormatter:
             self.raw_data = raw_data
             self.wind_angles = [0 for _ in range(len(raw_data))]
         else:
-            assert len(raw_data) == len(wind_angles), 'data and wind angles should have the same length'
-            assert all([0 <= wa < 360 for wa in wind_angles]), 'wind angle should be in [0, 360)'
+            assert len(raw_data) == len(wind_angles), (
+                "data and wind angles should have the same length"
+            )
+            assert all([0 <= wa < 360 for wa in wind_angles]), (
+                "wind angle should be in [0, 360)"
+            )
 
             self.raw_data = []
             self.wind_angles = wind_angles
-            for (i, wd) in enumerate(wind_angles):
+            for i, wd in enumerate(wind_angles):
                 if wd == 0:
                     self.raw_data.append(raw_data[i])
                 else:
@@ -504,9 +546,11 @@ class DataFormatter:
         """
         total_slices = 0
         fm, fn = self.fmt_shape
-        for (didx, data) in enumerate(self.raw_data):
+        for didx, data in enumerate(self.raw_data):
             alpha = self._actual_angles[didx]
-            exp_shape, blocks = _compute_expanded_shape_and_rotated_blocks(data, alpha, self.fmt_shape)
+            exp_shape, blocks = _compute_expanded_shape_and_rotated_blocks(
+                data, alpha, self.fmt_shape
+            )
             self._expanded_shapes[didx] = exp_shape
             self._rotated_blocks[didx] = blocks
             curr_slices = np.prod(blocks)
@@ -537,13 +581,15 @@ class DataFormatter:
         - `self._fmt_input_data`: Array to store the formatted input data.
         - `self._fmt_output_data`: Array to store the formatted output data.
         """
-        for (didx, data) in enumerate(self.raw_data):
+        for didx, data in enumerate(self.raw_data):
             dm, dn = np.shape(data)
             fm, fn = self._expanded_shapes[didx]
             m1, n1 = (fm - dm) // 2, (fn - dn) // 2
             m2, n2 = fm - dm - m1, fn - dn - n1
-            expanded_output = np.pad(data, ((m1, m2), (n1, n2)), 'wrap')
-            expanded_output = self._rotate_then_crop_expanded_data(expanded_output, didx)
+            expanded_output = np.pad(data, ((m1, m2), (n1, n2)), "wrap")
+            expanded_output = self._rotate_then_crop_expanded_data(
+                expanded_output, didx
+            )
 
             expanded_shape = np.shape(expanded_output)
             expanded_input = np.zeros(expanded_shape, dtype=self._data_type)
@@ -556,11 +602,17 @@ class DataFormatter:
                 for j in range(expanded_shape[1] // fn):
                     mbeg_idx, mend_idx = i * fm, (i + 1) * fm
                     nbeg_idx, nend_idx = j * fn, (j + 1) * fn
-                    self._fmt_input_data[icur_slice, 0, :, :] = expanded_input[mbeg_idx:mend_idx, nbeg_idx:nend_idx]
-                    self._fmt_output_data[icur_slice, 0, :, :] = expanded_output[mbeg_idx:mend_idx, nbeg_idx:nend_idx]
+                    self._fmt_input_data[icur_slice, 0, :, :] = expanded_input[
+                        mbeg_idx:mend_idx, nbeg_idx:nend_idx
+                    ]
+                    self._fmt_output_data[icur_slice, 0, :, :] = expanded_output[
+                        mbeg_idx:mend_idx, nbeg_idx:nend_idx
+                    ]
                     icur_slice += 1
 
-    def _restore_single_raw_output_data_from_slices(self, data_idx, slices, slice_start_idx, fill_value):
+    def _restore_single_raw_output_data_from_slices(
+        self, data_idx, slices, slice_start_idx, fill_value
+    ):
         """
         Restore a single raw output data array from its slices.
 
@@ -582,7 +634,9 @@ class DataFormatter:
             for j in range(expanded_shape[1] // fn):
                 mbeg_idx, mend_idx = i * fm, (i + 1) * fm
                 nbeg_idx, nend_idx = j * fn, (j + 1) * fn
-                expanded_output[mbeg_idx:mend_idx, nbeg_idx:nend_idx] = slices[cur_slice_idx, 0, :, :]
+                expanded_output[mbeg_idx:mend_idx, nbeg_idx:nend_idx] = slices[
+                    cur_slice_idx, 0, :, :
+                ]
                 cur_slice_idx += 1
         raw_output = self._extract_single_raw_output(data_idx, expanded_output)
         raw_output[self.raw_data[data_idx] < 0] = fill_value
@@ -591,12 +645,12 @@ class DataFormatter:
 
     def _rotate_then_crop_expanded_data(self, expanded_data, data_idx):
         """
-        Rotate the expanded data by the angle specified for the given data index, 
+        Rotate the expanded data by the angle specified for the given data index,
         then crop the rotated data to fit the desired format shape.
 
         Parameters:
         expanded_data (numpy.ndarray): The data to be rotated and cropped.
-        data_idx (int): The index of the data which determines the rotation angle 
+        data_idx (int): The index of the data which determines the rotation angle
                         and the block size for cropping.
 
         Returns:
@@ -605,12 +659,14 @@ class DataFormatter:
         alpha = self._actual_angles[data_idx]
         if alpha == 0:
             return expanded_data
-        expanded_data = ndimage.rotate(expanded_data, alpha, axes=(0, 1), reshape=True, order=0, mode='grid-wrap')
+        expanded_data = ndimage.rotate(
+            expanded_data, alpha, axes=(0, 1), reshape=True, order=0, mode="grid-wrap"
+        )
         em, en = np.shape(expanded_data)
         fm, fn = self.fmt_shape
         bm, bn = self._rotated_blocks[data_idx]
         sm, sn = (em - fm * bm) // 2, (en - fn * bn) // 2
-        return expanded_data[sm:(sm + fm * bm), sn:(sn + fn * bn)]
+        return expanded_data[sm : (sm + fm * bm), sn : (sn + fn * bn)]
 
     def _extract_single_raw_output(self, data_idx, expanded_output):
         """
@@ -631,6 +687,11 @@ class DataFormatter:
         dm, dn = np.shape(self.raw_data[data_idx])
         alpha = -self._actual_angles[data_idx]
         if alpha != 0:
-            expanded_output = ndimage.rotate(expanded_output, alpha, axes=(0, 1), reshape=False, order=1, cval=np.nan)
-        sm, sn = (expanded_output.shape[0] - dm) // 2, (expanded_output.shape[1] - dn) // 2
-        return expanded_output[sm:sm + dm, sn:sn + dn]
+            expanded_output = ndimage.rotate(
+                expanded_output, alpha, axes=(0, 1), reshape=False, order=1, cval=np.nan
+            )
+        sm, sn = (
+            (expanded_output.shape[0] - dm) // 2,
+            (expanded_output.shape[1] - dn) // 2,
+        )
+        return expanded_output[sm : sm + dm, sn : sn + dn]
