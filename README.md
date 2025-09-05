@@ -143,7 +143,9 @@ python feilian_main.py 42 --force-cpu --batch-size 1    # CPU debugging
 | `--mixed-precision` | Use mixed precision training | `True` | **Positive** - reduces memory usage (CUDA only) |
 | `--save-checkpoints` | Save periodic checkpoints | `True` | - |
 | `--checkpoint-interval` | Epochs between checkpoints | `50` | - |
+| `--model-dir` | Directory to save models | `./models` | - |
 | `--save-images` | Save prediction images | `False` | **Low** disk usage |
+| `--output-dir` | Directory for output files | `.output` | - |
 
 ### Memory Optimization Guide
 
