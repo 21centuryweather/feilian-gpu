@@ -144,6 +144,7 @@ python feilian_main.py 42 --force-cpu --batch-size 1    # CPU debugging
 | `--save-checkpoints` | Save periodic checkpoints | `True` | - |
 | `--checkpoint-interval` | Epochs between checkpoints | `50` | - |
 | `--save-images` | Save prediction images | `False` | **Low** disk usage |
+| `--output-dir` | Directory for output files | `.output` | **Low** disk usage |
 
 ### Memory Optimization Guide
 
