@@ -213,7 +213,7 @@ def _compute_then_add_metrics(all_metrics, y_true, y_pred):
     """
     all_metrics["r2_score"].append(r2_score(y_true, y_pred))
     all_metrics["mae"].append(mean_absolute_error(y_true, y_pred))
-    all_metrics["rmse"].append(mean_squared_error(y_true, y_pred, squared=False))
+    all_metrics["rmse"].append(mean_squared_error(y_true, y_pred)) # squared=False))
     _add_more_metrics(all_metrics, y_true, y_pred)
 
     return all_metrics

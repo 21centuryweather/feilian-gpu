@@ -6,8 +6,23 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
-from torch.nn.parallel import DataParallel
-from torch.utils.data import TensorDataset, DataLoader
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import TensorDataset, DataLoader, DistributedSampler
+import torch.distributed as dist
+
+def setup_distributed():
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        dist.init_process_group(
+            backend="nccl",  # use "gloo" if no GPUs
+            init_method="env://"
+        )
+        local_rank = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(local_rank)
+        print(f"[Setup] Rank {dist.get_rank()} using GPU {local_rank}")
+        return True
+    else:
+        print("[Setup] Running without torch.distributed")
+        return False
 
 
 def predict_with_model(model, x, batch_size=8):
@@ -25,16 +40,19 @@ def predict_with_model(model, x, batch_size=8):
     y = np.empty(np.shape(x))
     x_loader = DataLoader(TensorDataset(torch.tensor(x)), batch_size=batch_size, shuffle=False)
     idx = 0
-    for (xi,) in x_loader:
-        yi = model(xi).cpu().detach()
-        n = np.shape(yi)[0]
-        y[idx:(idx + n), :, :, :] = yi
-        idx += n
+    device = next(model.parameters()).device  # get model device
+    model.eval()
+    with torch.no_grad():
+        for (xi,) in x_loader:
+            xi = xi.to(device)  #move input to same device
+            yi = model(xi).cpu().detach()  # move output back to CPU for numpy
+            n = np.shape(yi)[0]
+            y[idx:(idx + n), :, :, :] = yi
+            idx += n
     return y
 
-
 def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3,
-                                  criterion=nn.L1Loss(), num_epochs=1000, model_dir=".output/models"):
+                                  criterion=nn.L1Loss(), num_epochs=10, model_dir=".output/models"):
     """
     Trains a neural network model using the Adam optimizer.
 
@@ -51,13 +69,16 @@ def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3
     Returns:
         torch.nn.Module: The trained neural network model.
     """
-    train_loader, model, device = _init_data_loader_and_model_and_device(model, x_train, y_train, batch_size)
+    train_loader, model, device, sampler  = _init_data_loader_and_model_and_device(model, x_train, y_train, batch_size)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     model.train()
 
     start_time = datetime.now()
     count = 0
     for epoch in range(num_epochs):
+        if sampler is not None:
+            sampler.set_epoch(epoch)  # shuffle differently each epoch
+
         total_loss, total_numel = 0.0, 0
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
@@ -73,7 +94,8 @@ def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3
 
         avg_train_loss = total_loss / total_numel
         time_elapsed = str(datetime.now() - start_time)[:-3]
-        print(f"[{time_elapsed}] Epoch [{epoch + 1}/{num_epochs}] - Loss: {avg_train_loss:.5f}")
+        if dist.get_rank() == 0 or dist.get_world_size() == 1:
+            print(f"[{time_elapsed}] Epoch [{epoch + 1}/{num_epochs}] - Loss: {avg_train_loss:.5f}")
         if avg_train_loss > 1e4:
             count += 1
             if count > 20:
@@ -81,11 +103,12 @@ def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3
                 return model
 
         count = 0
+    if dist.get_rank() == 0 or dist.get_world_size() == 1:
+        if not os.path.exists(model_dir):
+            os.makedirs(model_dir)
+        curr_time = datetime.now().strftime('%Y%m%dT%H:%M:%S')
+        torch.save(model.state_dict(), f"{model_dir}/feilian_net_{curr_time}.pth")
 
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
-    curr_time = datetime.now().strftime('%Y%m%dT%H:%M:%S')
-    torch.save(model.state_dict(), f"{model_dir}/feilian_net_{curr_time}.pth")
     return model
 
 
@@ -274,14 +297,32 @@ def _init_data_loader_and_model_and_device(model, x_train, y_train, batch_size):
             - model (torch.nn.Module): The model moved to the appropriate device.
             - device (torch.device): The device (CPU or GPU) on which the model is located.
     """
-    num_gpus = torch.cuda.device_count()
+    distributed = setup_distributed()
+
+
+
+    if distributed and dist.get_rank() == 0:
+        print("[Main] DDP initialized successfully")
+    elif not distributed:
+        print("[Main] Single-process run")
+
     dataset = TensorDataset(torch.tensor(x_train), torch.tensor(y_train))
-    train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-    if num_gpus > 1:
-        model = DataParallel(model)
-    return train_loader, model, device
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+    sampler = None
+    if distributed:
+        sampler = DistributedSampler(dataset)
+        train_loader = DataLoader(dataset, batch_size=batch_size, sampler=sampler)
+        local_rank = int(os.environ["LOCAL_RANK"])
+        model = model.to(device)
+        model = DDP(model, device_ids=[local_rank])
+        print(f"Rank {dist.get_rank()} using device {device}")
+        model = DDP(model, device_ids=[local_rank])
+    else:
+        train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        model = model.to(device)
+
+    return train_loader, model, device, sampler
 
 
 def _double_conv_layers(prev_chan, curr_chan, convargs, activation):

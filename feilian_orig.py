@@ -121,7 +121,7 @@ if __name__ == "__main__":
     print(f"activation is: {str(activation).split('(')[0]}")
     print(f"batch size is: {batch_size}")
     model = train_network_model_with_adam(model, x_train, y_train, batch_size=batch_size,
-                                          model_dir="/scratch/pu02/wl0925/feilian/models")
+                                          model_dir="/scratch/pawsey0001/ddeeptimahanti/feilian-gpu/models")
 
     y_train_pred = predict_with_model(model, x_train, batch_size)
     y_test_pred = predict_with_model(model, x_test, batch_size)
