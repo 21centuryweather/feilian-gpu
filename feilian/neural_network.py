@@ -14,10 +14,8 @@ def setup_distributed():
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
         dist.init_process_group(
             backend="nccl",  # use "gloo" if no GPUs
-            init_method="env://"
-        )
-        local_rank = int(os.environ["LOCAL_RANK"])
-        torch.cuda.set_device(local_rank)
+            init_method="env://")
+        local_rank = int(os.environ["RANK"])
         print(f"[Setup] Rank {dist.get_rank()} using GPU {local_rank}")
         return True
     else:
@@ -52,7 +50,7 @@ def predict_with_model(model, x, batch_size=8):
     return y
 
 def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3,
-                                  criterion=nn.L1Loss(), num_epochs=10, model_dir=".output/models"):
+                                  criterion=nn.L1Loss(), num_epochs=1000, model_dir=".output/models"):
     """
     Trains a neural network model using the Adam optimizer.
 
@@ -81,10 +79,10 @@ def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3
 
         total_loss, total_numel = 0.0, 0
         for x, y in train_loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.cuda(), y.cuda()
 
             optimizer.zero_grad()
-            loss = criterion(model(x), y)
+            loss = criterion(model(x).cuda(), y)
             loss.backward()
             optimizer.step()
 
@@ -94,7 +92,9 @@ def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3
 
         avg_train_loss = total_loss / total_numel
         time_elapsed = str(datetime.now() - start_time)[:-3]
-        if dist.get_rank() == 0 or dist.get_world_size() == 1:
+        local_rank = int(os.environ.get("RANK", 0))
+
+        if local_rank == 0:
             print(f"[{time_elapsed}] Epoch [{epoch + 1}/{num_epochs}] - Loss: {avg_train_loss:.5f}")
         if avg_train_loss > 1e4:
             count += 1
@@ -103,7 +103,7 @@ def train_network_model_with_adam(model, x_train, y_train, batch_size=8, lr=1e-3
                 return model
 
         count = 0
-    if dist.get_rank() == 0 or dist.get_world_size() == 1:
+    if local_rank == 0:
         if not os.path.exists(model_dir):
             os.makedirs(model_dir)
         curr_time = datetime.now().strftime('%Y%m%dT%H:%M:%S')
@@ -307,17 +307,17 @@ def _init_data_loader_and_model_and_device(model, x_train, y_train, batch_size):
         print("[Main] Single-process run")
 
     dataset = TensorDataset(torch.tensor(x_train), torch.tensor(y_train))
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    local_rank = int(os.environ.get("RANK", 0))
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
     sampler = None
     if distributed:
         sampler = DistributedSampler(dataset)
-        train_loader = DataLoader(dataset, batch_size=batch_size, sampler=sampler)
-        local_rank = int(os.environ["LOCAL_RANK"])
-        model = model.to(device)
-        model = DDP(model, device_ids=[local_rank])
+        size = dist.get_world_size()
+        bsz = int(batch_size / float(size))
+        train_loader = DataLoader(dataset, batch_size=bsz, sampler=sampler)
         print(f"Rank {dist.get_rank()} using device {device}")
-        model = DDP(model, device_ids=[local_rank])
+        model = model.cuda()
+        model = DDP(model)
     else:
         train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         model = model.to(device)
