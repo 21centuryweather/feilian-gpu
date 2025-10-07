@@ -10,6 +10,7 @@ Key Components:
 - FeilianNet: Main U-Net architecture with configurable depth and channels
 - Enhanced training functions with mixed precision and checkpointing
 - Cross-platform GPU support (CUDA, MPS, CPU)
+- Distributed Data Parallel (DDP) support for multi-GPU training
 - Model utilities for saving, loading, and parameter counting
 
 Architecture Features:
@@ -24,7 +25,8 @@ Typical Usage:
     >>> model = train_network_model_with_adam(
     ...     model, x_train, y_train,
     ...     device_preference="auto",
-    ...     use_mixed_precision=True
+    ...     use_mixed_precision=True,
+    ...     enable_distributed=False
     ... )
     >>> predictions = predict_with_model(model, x_test)
 
@@ -104,9 +106,11 @@ def train_network_model_with_adam(
     use_mixed_precision=True,
     save_checkpoints=True,
     checkpoint_interval=50,
+    enable_distributed=False,
+    distributed_backend=None,
 ):
     """
-    Trains a neural network model using the Adam optimizer with enhanced GPU support.
+    Trains a neural network model using the Adam optimizer with enhanced GPU and distributed support.
 
     Args:
         model (torch.nn.Module): The neural network model to be trained.
@@ -115,20 +119,29 @@ def train_network_model_with_adam(
         batch_size (int, optional): The number of samples per batch. Default is 8.
         lr (float, optional): The learning rate for the Adam optimizer. Default is 1e-3.
         criterion (torch.nn.Module, optional): The loss function to be used. Default is nn.L1Loss().
-        num_epochs (int, optional): The number of epochs to train the model. Default is 1000.
+        num_epochs (int, optional): The number of epochs to train the model. Default is 10.
         model_dir (str, optional): The directory where the trained model will be saved. Default is ".output/models".
         device_preference (str, optional): Device preference: "auto", "mps", "cuda", or "cpu". Default is "auto".
         use_mixed_precision (bool, optional): Whether to use mixed precision training. Default is True.
         save_checkpoints (bool, optional): Whether to save periodic checkpoints. Default is True.
         checkpoint_interval (int, optional): Interval for saving checkpoints. Default is 50.
+        enable_distributed (bool, optional): Enable distributed data parallel training. Default is False.
+        distributed_backend (str, optional): Distributed backend ("nccl", "gloo", "auto", or None). Default is None.
 
     Returns:
-        torch.nn.Module: The trained neural network model.
+        torch.nn.Module: The trained neural network model (wrapped with DDP if distributed).
     """
-    # Initialize device manager
-    device_manager = DeviceManager(device_preference)
+    # Initialize device manager with distributed support
+    device_manager = DeviceManager(
+        device_preference=device_preference,
+        enable_distributed=enable_distributed,
+        distributed_backend=distributed_backend
+    )
     device = device_manager.device
-    device_manager.print_device_info()
+    
+    # Only print device info from main process in distributed mode
+    if device_manager.is_main_process():
+        device_manager.print_device_info()
 
     # Prepare data
     if isinstance(x_train, np.ndarray):
@@ -155,20 +168,25 @@ def train_network_model_with_adam(
             from torch.cuda.amp import GradScaler, autocast
 
             scaler = GradScaler()
-            print("Using mixed precision training with CUDA AMP")
+            if device_manager.is_main_process():
+                print("Using mixed precision training with CUDA AMP")
         except ImportError:
-            print("Mixed precision not available, using standard training")
+            if device_manager.is_main_process():
+                print("Mixed precision not available, using standard training")
 
     model.train()
     start_time = datetime.now()
     count = 0
     best_loss = float("inf")
 
-    # Create model directory
-    if not os.path.exists(model_dir):
+    # Create model directory (only on main process)
+    if device_manager.is_main_process() and not os.path.exists(model_dir):
         os.makedirs(model_dir)
 
     for epoch in range(num_epochs):
+        # Set epoch for distributed sampler
+        device_manager.set_epoch(train_loader, epoch)
+        
         total_loss, total_numel = 0.0, 0
 
         for x, y in train_loader:
@@ -193,28 +211,32 @@ def train_network_model_with_adam(
 
         avg_train_loss = total_loss / total_numel
         time_elapsed = str(datetime.now() - start_time)[:-3]
-        print(
-            f"[{time_elapsed}] Epoch [{epoch + 1}/{num_epochs}] - Loss: {avg_train_loss:.5f}"
-        )
+        
+        # Only print from main process in distributed mode
+        if device_manager.is_main_process():
+            print(
+                f"[{time_elapsed}] Epoch [{epoch + 1}/{num_epochs}] - Loss: {avg_train_loss:.5f}"
+            )
 
         # Early stopping for diverging loss
         if avg_train_loss > 1e4:
             count += 1
             if count > 20:
-                print("Loss is too large, terminating...")
+                if device_manager.is_main_process():
+                    print("Loss is too large, terminating...")
                 break
         else:
             count = 0
 
-        # Save checkpoint
-        if save_checkpoints and (epoch + 1) % checkpoint_interval == 0:
+        # Save checkpoint (only from main process)
+        if save_checkpoints and (epoch + 1) % checkpoint_interval == 0 and device_manager.is_main_process():
             checkpoint_path = f"{model_dir}/checkpoint_epoch_{epoch + 1}.pth"
             save_checkpoint(
                 model, optimizer, epoch + 1, avg_train_loss, checkpoint_path
             )
 
-        # Save best model
-        if avg_train_loss < best_loss:
+        # Save best model (only from main process)
+        if avg_train_loss < best_loss and device_manager.is_main_process():
             best_loss = avg_train_loss
             best_model_path = f"{model_dir}/best_model.pth"
             save_model_state(model, best_model_path)
@@ -223,23 +245,24 @@ def train_network_model_with_adam(
         if (epoch + 1) % 100 == 0:
             device_manager.clear_cache()
 
-    # Save final model
-    curr_time = datetime.now().strftime("%Y%m%dT%H:%M:%S")
-    final_model_path = f"{model_dir}/feilian_net_{curr_time}.pth"
-    save_model_state(model, final_model_path)
-    print(f"Model saved to {final_model_path}")
+    # Save final model (only from main process)
+    if device_manager.is_main_process():
+        curr_time = datetime.now().strftime("%Y%m%dT%H:%M:%S")
+        final_model_path = f"{model_dir}/feilian_net_{curr_time}.pth"
+        save_model_state(model, final_model_path)
+        print(f"Model saved to {final_model_path}")
 
     return model
 
 
 def save_checkpoint(model, optimizer, epoch, loss, path):
     """Save training checkpoint."""
-    # Handle DataParallel models
-    model_state = (
-        model.module.state_dict()
-        if isinstance(model, DataParallel)
-        else model.state_dict()
-    )
+    # Handle DataParallel and DDP models
+    if hasattr(model, 'module'):
+        # Model is wrapped with DataParallel or DDP
+        model_state = model.module.state_dict()
+    else:
+        model_state = model.state_dict()
 
     checkpoint = {
         "epoch": epoch,
@@ -254,12 +277,12 @@ def save_checkpoint(model, optimizer, epoch, loss, path):
 
 def save_model_state(model, path):
     """Save only model state dict."""
-    # Handle DataParallel models
-    model_state = (
-        model.module.state_dict()
-        if isinstance(model, DataParallel)
-        else model.state_dict()
-    )
+    # Handle DataParallel and DDP models
+    if hasattr(model, 'module'):
+        # Model is wrapped with DataParallel or DDP
+        model_state = model.module.state_dict()
+    else:
+        model_state = model.state_dict()
     torch.save(model_state, path)
 
 

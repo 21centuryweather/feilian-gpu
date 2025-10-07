@@ -23,6 +23,19 @@ from .device_manager import (
     print_available_devices,
 )
 
+# Distributed training utilities for multi-GPU and multi-node training
+from .distributed import (
+    DistributedInfo,
+    setup_distributed_training,
+    cleanup_distributed,
+    create_distributed_sampler,
+    wrap_model_for_ddp,
+    all_reduce_metrics,
+    barrier_and_print,
+    distributed_context,
+    get_distributed_info,
+)
+
 # ============================================================================
 # NetCDF Data Loading (Optional Dependency)
 # ============================================================================
@@ -78,6 +91,7 @@ from . import benchmark  # feilian.benchmark.BenchmarkRunner()
 from . import memory_manager as memory  # feilian.memory.allocate()
 from . import amp as mixed_precision  # feilian.mixed_precision.autocast()
 from . import checkpoint  # feilian.checkpoint.wrap_with_checkpointing()
+from . import distributed  # feilian.distributed.setup_distributed_training()
 
 # Version information
 __version__ = "1.0.0"
@@ -98,6 +112,17 @@ __all__ = [
     "get_device_manager",
     "get_best_device",
     "print_available_devices",
+    # Distributed training
+    "DistributedInfo",
+    "setup_distributed_training",
+    "cleanup_distributed",
+    "create_distributed_sampler",
+    "wrap_model_for_ddp",
+    "all_reduce_metrics",
+    "barrier_and_print",
+    "distributed_context",
+    "get_distributed_info",
+    "distributed",
     # Benchmarking
     "BenchmarkRunner",
     "ModelFactory",

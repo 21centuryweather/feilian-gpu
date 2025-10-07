@@ -115,6 +115,19 @@ def setup_argparse():
         help="Disable mixed precision training",
     )
 
+    # Distributed training arguments
+    parser.add_argument(
+        "--distributed",
+        action="store_true",
+        help="Enable distributed data parallel training",
+    )
+    parser.add_argument(
+        "--distributed-backend",
+        choices=["auto", "nccl", "gloo"],
+        default="auto",
+        help="Distributed backend for multi-GPU training",
+    )
+
     # Checkpoint arguments
     parser.add_argument(
         "--save-checkpoints",
@@ -287,20 +300,32 @@ def main():
     if args.verbose:
         print_available_devices()
 
-    # Initialize device manager
-    device_manager = get_device_manager(args.device, args.force_cpu)
-    logger.info(f"Using device: {device_manager.device}")
+    # Initialize device manager with distributed support
+    device_manager = get_device_manager(
+        device_preference=args.device, 
+        force_cpu=args.force_cpu,
+        enable_distributed=args.distributed,
+        distributed_backend=args.distributed_backend if args.distributed else None
+    )
+    
+    if device_manager.is_main_process():
+        logger.info(f"Using device: {device_manager.device}")
+        if device_manager.is_distributed():
+            logger.info(f"Distributed training: rank {device_manager.get_rank()} of {device_manager.get_world_size()}")
 
     # Load data files
-    logger.info(f"Loading data from: {args.data_path}")
+    if device_manager.is_main_process():
+        logger.info(f"Loading data from: {args.data_path}")
     files = load_files_from_path(args.data_path)
 
     if not files:
-        logger.error("No data files found!")
+        if device_manager.is_main_process():
+            logger.error("No data files found!")
         sys.exit(1)
 
     # Load images and angles
-    logger.info("Loading images...")
+    if device_manager.is_main_process():
+        logger.info("Loading images...")
     images = []
     for f in files:
         try:
@@ -344,10 +369,12 @@ def main():
             sys.exit(1)
 
     angles = [parse_wind_angle(fname) for fname in files]
-    logger.info(f"Loaded {len(images)} images with angles: {set(angles)}")
+    if device_manager.is_main_process():
+        logger.info(f"Loaded {len(images)} images with angles: {set(angles)}")
 
     # Initialize data formatter
-    logger.info(f"Initializing data formatter with shape: {args.formatted_shape}")
+    if device_manager.is_main_process():
+        logger.info(f"Initializing data formatter with shape: {args.formatted_shape}")
     data_fmt = DataFormatter(
         images, wind_angles=angles, formatted_shape=args.formatted_shape
     )
@@ -357,11 +384,12 @@ def main():
         data_fmt.split_train_test_data(args.train_ratio, args.seed)
     )
 
-    logger.info(f"Data split with seed: {args.seed}")
-    logger.info(f"Train indices: {train_idx}")
-    logger.info(f"Train data shape: {np.shape(x_train)}")
-    logger.info(f"Test indices: {test_idx}")
-    logger.info(f"Test data shape: {np.shape(x_test)}")
+    if device_manager.is_main_process():
+        logger.info(f"Data split with seed: {args.seed}")
+        logger.info(f"Train indices: {train_idx}")
+        logger.info(f"Train data shape: {np.shape(x_train)}")
+        logger.info(f"Test indices: {test_idx}")
+        logger.info(f"Test data shape: {np.shape(x_test)}")
 
     # Initialize model
     activation = get_activation_function(args.activation)
@@ -369,12 +397,16 @@ def main():
         chan_multi=args.chan_multi, max_level=args.max_level, activation=activation
     )
 
-    logger.info(f"Model parameters: {model.count_trainable_parameters():,}")
-    logger.info(f"Activation: {args.activation}")
-    logger.info(f"Batch size: {args.batch_size}")
+    if device_manager.is_main_process():
+        logger.info(f"Model parameters: {model.count_trainable_parameters():,}")
+        logger.info(f"Activation: {args.activation}")
+        logger.info(f"Batch size: {args.batch_size}")
 
     # Train model
-    logger.info("Starting training...")
+    if device_manager.is_main_process():
+        logger.info("Starting training...")
+        if args.distributed:
+            logger.info("Distributed training enabled")
     model = train_network_model_with_adam(
         model,
         x_train,
@@ -387,50 +419,53 @@ def main():
         use_mixed_precision=args.mixed_precision,
         save_checkpoints=args.save_checkpoints,
         checkpoint_interval=args.checkpoint_interval,
+        enable_distributed=args.distributed,
+        distributed_backend=args.distributed_backend if args.distributed else None,
     )
 
-    # Generate predictions
-    logger.info("Generating predictions...")
-    y_train_pred = predict_with_model(model, x_train, args.batch_size, device_manager)
-    y_test_pred = predict_with_model(model, x_test, args.batch_size, device_manager)
+    # Generate predictions (only on main process)
+    if device_manager.is_main_process():
+        logger.info("Generating predictions...")
+        y_train_pred = predict_with_model(model, x_train, args.batch_size, device_manager)
+        y_test_pred = predict_with_model(model, x_test, args.batch_size, device_manager)
 
-    # Save results
-    curr_time = datetime.now().strftime("%Y%m%dT%H:%M:%S.%f")
-    case_type = args.data_path.replace("data/", "").rstrip("/")
+        # Save results (only on main process)
+        curr_time = datetime.now().strftime("%Y%m%dT%H:%M:%S.%f")
+        case_type = args.data_path.replace("data/", "").rstrip("/")
 
-    # Training results
-    train_images_dir = f"{args.output_dir}/images/{case_type}/train"
-    train_metrics_csv = (
-        f"metrics_train_seed{args.seed}_act{args.activation}_time{curr_time}.csv"
-    )
-    save_training_results(
-        data_fmt,
-        files,
-        angles,
-        train_images_dir,
-        y_train_pred,
-        train_idx,
-        train_metrics_csv,
-        args.save_images,
-    )
+        # Training results
+        train_images_dir = f"{args.output_dir}/images/{case_type}/train"
+        train_metrics_csv = (
+            f"metrics_train_seed{args.seed}_act{args.activation}_time{curr_time}.csv"
+        )
+        save_training_results(
+            data_fmt,
+            files,
+            angles,
+            train_images_dir,
+            y_train_pred,
+            train_idx,
+            train_metrics_csv,
+            args.save_images,
+        )
 
-    # Test results
-    test_images_dir = f"{args.output_dir}/images/{case_type}/test"
-    test_metrics_csv = (
-        f"metrics_test_seed{args.seed}_act{args.activation}_time{curr_time}.csv"
-    )
-    save_training_results(
-        data_fmt,
-        files,
-        angles,
-        test_images_dir,
-        y_test_pred,
-        test_idx,
-        test_metrics_csv,
-        args.save_images,
-    )
+        # Test results
+        test_images_dir = f"{args.output_dir}/images/{case_type}/test"
+        test_metrics_csv = (
+            f"metrics_test_seed{args.seed}_act{args.activation}_time{curr_time}.csv"
+        )
+        save_training_results(
+            data_fmt,
+            files,
+            angles,
+            test_images_dir,
+            y_test_pred,
+            test_idx,
+            test_metrics_csv,
+            args.save_images,
+        )
 
-    logger.info("Training completed successfully!")
+        logger.info("Training completed successfully!")
 
     # Print final device memory usage if CUDA
     if device_manager.device.type == "cuda":

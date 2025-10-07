@@ -25,6 +25,15 @@ The project predicts pedestrian-level wind speeds around buildings using:
 - **Mixed precision training** (CUDA)
 - **Memory monitoring** and cleanup
 
+### Distributed Training **NEW**
+
+- **Multi-GPU training** with Distributed Data Parallel (DDP)
+- **Cross-platform distributed support** (CUDA NCCL, MPS/CPU Gloo)
+- **Multi-node scaling** for cluster environments
+- **Automatic backend selection** based on hardware
+- **Seamless integration** with existing features (mixed precision, checkpointing)
+- **Easy launch scripts** for common distributed scenarios
+
 ### 3D NetCDF Data Integration **FULLY WORKING**
 
 - **NetCDF4 file support** for 3D wind speed data - **xarray/netCDF4 loading now functional**
@@ -128,6 +137,34 @@ python feilian_main.py 42 --device mps --batch-size 2   # Apple Silicon
 python feilian_main.py 42 --force-cpu --batch-size 1    # CPU debugging
 ```
 
+### Distributed Training (Multi-GPU)
+
+**Single Node Multi-GPU Training:**
+
+```bash
+# 4 GPUs using launch script (recommended)
+./launch_distributed.sh single-node-4gpu
+
+# 8 GPUs with custom batch size
+BATCH_SIZE=4 ./launch_distributed.sh single-node-8gpu
+
+# Using torchrun directly
+torchrun --nproc_per_node=4 --standalone feilian_main.py 42 \
+    --distributed --batch-size 8 --num-epochs 1000
+```
+
+**Multi-Node Training:**
+
+```bash
+# Master node (rank 0)
+MASTER_ADDR=192.168.1.100 NODE_RANK=0 ./launch_distributed.sh multi-node
+
+# Worker node (rank 1)
+MASTER_ADDR=192.168.1.100 NODE_RANK=1 ./launch_distributed.sh multi-node
+```
+
+**See [docs/DISTRIBUTED_TRAINING.md](docs/DISTRIBUTED_TRAINING.md) for comprehensive distributed training guide.**
+
 ### Command Line Options
 
 | Option | Description | Default | Memory Impact |
@@ -146,6 +183,8 @@ python feilian_main.py 42 --force-cpu --batch-size 1    # CPU debugging
 | `--model-dir` | Directory to save models | `./models` | - |
 | `--save-images` | Save prediction images | `False` | **Low** disk usage |
 | `--output-dir` | Directory for output files | `.output` | - |
+| `--distributed` | Enable distributed training | `False` | - |
+| `--distributed-backend` | Backend (auto/nccl/gloo) | `auto` | - |
 
 ### Memory Optimization Guide
 
