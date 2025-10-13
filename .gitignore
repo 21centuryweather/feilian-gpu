@@ -219,3 +219,10 @@ metadata.csv
 WARP.md
 .DS_Store
 raw_data/
+old/
+scripts/
+tmp/
+tests/
+slurm_version/
+log_backup/
+.warp/

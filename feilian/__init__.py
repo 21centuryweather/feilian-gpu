@@ -23,6 +23,19 @@ from .device_manager import (
     print_available_devices,
 )
 
+# Distributed training utilities for multi-GPU and multi-node training
+from .distributed import (
+    DistributedInfo,
+    setup_distributed_training,
+    cleanup_distributed,
+    create_distributed_sampler,
+    wrap_model_for_ddp,
+    all_reduce_metrics,
+    barrier_and_print,
+    distributed_context,
+    get_distributed_info,
+)
+
 # ============================================================================
 # NetCDF Data Loading (Optional Dependency)
 # ============================================================================
@@ -78,6 +91,7 @@ from . import benchmark  # feilian.benchmark.BenchmarkRunner()
 from . import memory_manager as memory  # feilian.memory.allocate()
 from . import amp as mixed_precision  # feilian.mixed_precision.autocast()
 from . import checkpoint  # feilian.checkpoint.wrap_with_checkpointing()
+from . import distributed  # feilian.distributed.setup_distributed_training()
 
 # Version information
 __version__ = "1.0.0"
@@ -98,6 +112,17 @@ __all__ = [
     "get_device_manager",
     "get_best_device",
     "print_available_devices",
+    # Distributed training
+    "DistributedInfo",
+    "setup_distributed_training",
+    "cleanup_distributed",
+    "create_distributed_sampler",
+    "wrap_model_for_ddp",
+    "all_reduce_metrics",
+    "barrier_and_print",
+    "distributed_context",
+    "get_distributed_info",
+    "distributed",
     # Benchmarking
     "BenchmarkRunner",
     "ModelFactory",
@@ -131,3 +156,28 @@ __all__ = [
     "estimate_memory_usage",
     "checkpoint",
 ]
+
+# Add NetCDF functions that are used in the main script
+try:
+    from .netcdf_loader import load_netcdf_wind_speed as load_wind_data
+    from .netcdf_loader import parse_wind_angle_from_netcdf_filename
+except ImportError:
+    # NetCDF not available - functions will fail at runtime
+    def load_wind_data(*args, **kwargs):
+        raise ImportError("NetCDF support not available")
+
+# Add NetCDF functions that are used in the main script
+try:
+    from .netcdf_loader import parse_wind_angle_from_netcdf_filename
+    
+    # Create wrapper for load_wind_data that maps to load_netcdf_wind_speed
+    def load_wind_data(filepath, netcdf_variable="wind_speed", z_level=1, transpose=False):
+        from .netcdf_loader import load_netcdf_wind_speed
+        return load_netcdf_wind_speed(filepath, variable_name=netcdf_variable, 
+                                      z_level=z_level, transpose=transpose)
+except ImportError:
+    # NetCDF not available - functions will fail at runtime
+    def load_wind_data(*args, **kwargs):
+        raise ImportError("NetCDF support not available")
+    def parse_wind_angle_from_netcdf_filename(*args, **kwargs):
+        raise ImportError("NetCDF support not available")

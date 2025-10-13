@@ -1,0 +1,81 @@
+#!/bin/bash --login
+#SBATCH --job-name=feilian_multinode_fixed
+#SBATCH --partition=gpu-dev
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=8
+#SBATCH --gpus-per-node=8
+#SBATCH --exclusive
+#SBATCH --time=1:00:00
+#SBATCH --account=pawsey0928-gpu
+
+# Load required modules
+module load pytorch/2.7.1-rocm6.3.3
+export SINGULARITYENV_LD_PRELOAD=/opt/cray/libfabric/1.15.2.0/lib64/libfabric.so:$SINGULARITYENV_LD_PRELOAD
+export SINGULARITYENV_PYTHONPATH=/software/projects/pawsey0928/feilian-gpu/uptake/lib/python3.12/site-packages:$SINGULARITYENV_PYTHONPATH
+
+# Create a local dir in tmp for MIOPEN 
+export TMPDIR="/tmp/${USER}-${SLURM_JOB_ID}"
+mkdir -p $TMPDIR
+
+# MIOPEN configuration 
+export MIOPEN_USER_DB_PATH="$TMPDIR/miopen"
+export MIOPEN_CUSTOM_CACHE_DIR="$TMPDIR/miopen_cache"
+mkdir -p $MIOPEN_USER_DB_PATH $MIOPEN_CUSTOM_CACHE_DIR
+export OMP_NUM_THREADS=8
+
+# Enable debug for multi-node testing
+export NCCL_DEBUG=INFO 
+
+# Tell *CCL how to use slingshot nics
+export NCCL_SOCKET_IFNAME=hsn0,hsn1,hsn2,hsn3
+export NCCL_NET_GDR_LEVEL=PHB
+
+# IMPORTANT: Ensure all GPUs are visible to all processes initially
+export HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export ROCR_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+echo "=== MULTI-NODE JOB STARTING (FIXED) ==="
+echo "Job ID: $SLURM_JOB_ID"
+echo "Working directory: $(pwd)"
+echo "Nodes: $SLURM_NNODES"
+echo "Tasks per node: $SLURM_NTASKS_PER_NODE"
+echo "Total tasks: $SLURM_NTASKS"
+echo "GPU devices per node: $SLURM_GPUS_PER_NODE"
+echo "Node list: $SLURM_NODELIST"
+
+job_starttime=$(date +%s%N)
+module load singularity/4.1.0-mpi-gpu
+
+# Test PyTorch and ROCm setup on all nodes - verify GPUs are visible
+echo "=== ENVIRONMENT CHECK ==="
+srun bash -c 'echo "Node $(hostname), Task $SLURM_PROCID, Local $SLURM_LOCALID: "; python3 -c "import torch; print(f\"CUDA available: {torch.cuda.is_available()}\"); print(f\"Device count: {torch.cuda.device_count()}\"); print(f\"HIP env: {os.environ.get(\"HIP_VISIBLE_DEVICES\", \"unset\")}\")" 2>/dev/null; echo "---"'
+
+echo "=== Starting Training ==="
+
+# Multi-node run - let the launcher handle device assignment per process
+srun -N $SLURM_NNODES -n $SLURM_NTASKS -c 8 \
+    --ntasks-per-node=$SLURM_NTASKS_PER_NODE \
+    --gpus-per-node=$SLURM_GPUS_PER_NODE \
+    --cpu-bind=cores \
+    --output log-feilian-multinode-fixed-%j-%t.out \
+    python3 run_feilian_slurm.py 42 \
+        --distributed \
+        --distributed-backend nccl \
+        --num-epochs 1000 \
+        --data-path raw_data/wind3D/idealized/ \
+        --batch-size 16 \
+        --verbose
+
+# Logging job end
+job_endtime=$(date +%s%N)
+job_runtime=$(echo "scale=9; 1.0*10^(-9)*(${job_endtime}-${job_starttime})" | bc -l)
+echo "=== MULTI-NODE TEST COMPLETED ==="
+echo "Job time = ${job_runtime} seconds"
+
+# Copy any monitoring logs to scratch if they exist
+if [ -n "$MYSCRATCH" ] && [ -f monitor_gpu_node* ]; then
+    cp monitor_gpu_node* $MYSCRATCH
+fi
+
+# Cleanup anything we put in tmp
+rm -rf ${TMPDIR}

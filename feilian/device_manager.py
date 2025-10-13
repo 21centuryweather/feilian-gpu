@@ -32,7 +32,8 @@ Version: 1.0.0
 import torch
 import logging
 import platform
-from typing import Optional
+from typing import Optional, Union
+from .distributed import setup_distributed_training, DistributedInfo, wrap_model_for_ddp, create_distributed_sampler
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -48,21 +49,41 @@ class DeviceManager:
     Supports Apple Silicon MPS, NVIDIA CUDA, and CPU fallback.
     """
 
-    def __init__(self, device_preference: str = "auto", force_cpu: bool = False):
+    def __init__(
+        self, 
+        device_preference: str = "auto", 
+        force_cpu: bool = False,
+        enable_distributed: bool = False,
+        distributed_backend: Optional[str] = None
+    ):
         """
-        Initialize the device manager.
+        Initialize the device manager with optional distributed training support.
 
         Args:
             device_preference: One of "auto", "mps", "cuda", "cpu"
             force_cpu: Force CPU usage regardless of available hardware
+            enable_distributed: Enable distributed data parallel training
+            distributed_backend: Distributed backend ("nccl", "gloo", "auto", or None)
         """
         self.device_preference = device_preference.lower()
         self.force_cpu = force_cpu
+        self.enable_distributed = enable_distributed
+        
+        # Initialize distributed training if enabled
+        if enable_distributed:
+            self.distributed_info = setup_distributed_training(distributed_backend)
+            logger.info(f"Distributed training enabled: {self.distributed_info}")
+        else:
+            self.distributed_info = DistributedInfo()
+        
+        # Select device (may be overridden by distributed setup)
         self.device = self._select_device()
         self.is_apple_silicon = self._is_apple_silicon()
 
         logger.info(f"Device Manager initialized with device: {self.device}")
         logger.info(f"Platform: {platform.system()} {platform.machine()}")
+        if self.distributed_info.is_distributed:
+            logger.info(f"Running in distributed mode: rank {self.distributed_info.rank} of {self.distributed_info.world_size}")
 
     def _is_apple_silicon(self) -> bool:
         """Check if running on Apple Silicon."""
@@ -71,10 +92,16 @@ class DeviceManager:
     def _select_device(self) -> torch.device:
         """
         Select the best available device based on preference and availability.
+        In distributed mode, uses device from distributed info if available.
 
         Returns:
             torch.device: The selected device
         """
+        # Use distributed device if available
+        if self.distributed_info.is_distributed and self.distributed_info.device:
+            logger.info(f"Using distributed device: {self.distributed_info.device}")
+            return self.distributed_info.device
+            
         if self.force_cpu:
             logger.info("Forcing CPU usage as requested")
             return torch.device("cpu")
@@ -179,17 +206,21 @@ class DeviceManager:
         return info
 
     def optimize_model(
-        self, model: torch.nn.Module, use_compile: bool = True
+        self, 
+        model: torch.nn.Module, 
+        use_compile: bool = True,
+        find_unused_parameters: bool = False
     ) -> torch.nn.Module:
         """
-        Optimize model for the selected device.
+        Optimize model for the selected device with optional distributed training.
 
         Args:
             model: PyTorch model
             use_compile: Whether to use torch.compile (PyTorch 2.0+)
+            find_unused_parameters: For DDP, whether to find unused parameters
 
         Returns:
-            Optimized model
+            Optimized model (wrapped with DDP if distributed)
         """
         # Move model to device
         model = model.to(self.device)
@@ -200,13 +231,22 @@ class DeviceManager:
         elif self.device.type == "mps":
             model = self._optimize_for_mps(model)
 
-        # Apply torch.compile if available and requested
-        if use_compile and hasattr(torch, "compile"):
+        # Apply torch.compile if available and requested (before DDP wrapping)
+        if use_compile and hasattr(torch, "compile") and not self.distributed_info.is_distributed:
             try:
                 model = torch.compile(model)
                 logger.info("Model compiled with torch.compile")
             except Exception as e:
                 logger.warning(f"torch.compile failed: {e}")
+
+        # Wrap with DDP if in distributed mode
+        if self.distributed_info.is_distributed:
+            model = wrap_model_for_ddp(
+                model, 
+                self.distributed_info, 
+                find_unused_parameters=find_unused_parameters
+            )
+            logger.info("Model wrapped with DistributedDataParallel")
 
         return model
 
@@ -216,10 +256,12 @@ class DeviceManager:
         if hasattr(torch.cuda, "amp"):
             logger.info("CUDA AMP (Automatic Mixed Precision) available")
 
-        # Multi-GPU support
-        if torch.cuda.device_count() > 1:
+        # Multi-GPU support (only if not using distributed training)
+        if torch.cuda.device_count() > 1 and not self.distributed_info.is_distributed:
             logger.info(f"Using {torch.cuda.device_count()} GPUs with DataParallel")
             model = torch.nn.DataParallel(model)
+        elif self.distributed_info.is_distributed:
+            logger.info("Skipping DataParallel - using DistributedDataParallel instead")
 
         return model
 
@@ -235,18 +277,20 @@ class DeviceManager:
         batch_size: int,
         shuffle: bool = True,
         num_workers: Optional[int] = None,
+        drop_last: bool = False
     ) -> torch.utils.data.DataLoader:
         """
-        Create optimized DataLoader for the device.
+        Create optimized DataLoader for the device with distributed support.
 
         Args:
             dataset: PyTorch dataset
-            batch_size: Batch size
+            batch_size: Batch size (will be divided by world_size in distributed mode)
             shuffle: Whether to shuffle data
             num_workers: Number of worker processes
+            drop_last: Whether to drop incomplete batches
 
         Returns:
-            Optimized DataLoader
+            Optimized DataLoader with optional distributed sampler
         """
         if num_workers is None:
             # Auto-select number of workers based on device and platform
@@ -260,19 +304,47 @@ class DeviceManager:
 
         # Pin memory for GPU devices
         pin_memory = self.device.type in ["cuda", "mps"]
+        
+        # Create distributed sampler if needed
+        sampler = None
+        effective_batch_size = batch_size
+        
+        if self.distributed_info.is_distributed:
+            sampler = create_distributed_sampler(
+                dataset, 
+                self.distributed_info, 
+                shuffle=shuffle,
+                drop_last=drop_last
+            )
+            # Adjust batch size for distributed training
+            if batch_size < self.distributed_info.world_size:
+                logger.warning(f"Batch size ({batch_size}) is smaller than world size ({self.distributed_info.world_size})")
+                logger.warning(f"Setting effective batch size to 1 per GPU. Consider increasing --batch-size to at least {self.distributed_info.world_size}")
+                effective_batch_size = 1
+            else:
+                effective_batch_size = batch_size // self.distributed_info.world_size
+            
+            shuffle = False  # Shuffling handled by DistributedSampler
+            logger.info(f"Created distributed sampler for rank {self.distributed_info.rank}")
+            logger.info(f"Using distributed sampler with effective batch size: {effective_batch_size}")
 
         dataloader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=batch_size,
+            batch_size=effective_batch_size,
             shuffle=shuffle,
+            sampler=sampler,
             num_workers=num_workers,
             pin_memory=pin_memory,
             persistent_workers=num_workers > 0,
+            drop_last=drop_last
         )
 
         logger.info(
             f"Created DataLoader with {num_workers} workers, pin_memory={pin_memory}"
         )
+        if sampler:
+            logger.info("DataLoader uses DistributedSampler")
+            
         return dataloader
 
     def move_to_device(self, tensor_or_model):
@@ -289,6 +361,34 @@ class DeviceManager:
                 torch.mps.empty_cache()
                 logger.info("MPS cache cleared")
 
+    def is_distributed(self) -> bool:
+        """Check if running in distributed mode."""
+        return self.distributed_info.is_distributed
+    
+    def is_main_process(self) -> bool:
+        """Check if this is the main process (rank 0)."""
+        return self.distributed_info.is_main_process
+    
+    def get_rank(self) -> int:
+        """Get the current process rank."""
+        return self.distributed_info.rank
+    
+    def get_world_size(self) -> int:
+        """Get the total number of processes."""
+        return self.distributed_info.world_size
+    
+    def barrier(self):
+        """Synchronize all processes."""
+        if self.distributed_info.is_distributed:
+            import torch.distributed as dist
+            dist.barrier()
+    
+    def set_epoch(self, dataloader, epoch: int):
+        """Set epoch for distributed sampler."""
+        if hasattr(dataloader, 'sampler') and hasattr(dataloader.sampler, 'set_epoch'):
+            dataloader.sampler.set_epoch(epoch)
+            logger.debug(f"Set epoch {epoch} for distributed sampler")
+
     def print_device_info(self):
         """Print comprehensive device information."""
         info = self.get_device_info()
@@ -301,6 +401,16 @@ class DeviceManager:
 
         print("=" * 50)
 
+        # Distributed information
+        if self.distributed_info.is_distributed:
+            print("\nDISTRIBUTED TRAINING:")
+            print(f"Rank: {self.distributed_info.rank}")
+            print(f"World Size: {self.distributed_info.world_size}")
+            print(f"Backend: {self.distributed_info.backend}")
+            print(f"Local Rank: {self.distributed_info.local_rank}")
+            print(f"Main Process: {self.distributed_info.is_main_process}")
+            print("=" * 50)
+
         # Additional availability info
         print("\nDEVICE AVAILABILITY:")
         print(f"CUDA Available: {self._is_cuda_available()}")
@@ -310,7 +420,10 @@ class DeviceManager:
 
 
 def get_device_manager(
-    device_preference: str = "auto", force_cpu: bool = False
+    device_preference: str = "auto", 
+    force_cpu: bool = False,
+    enable_distributed: bool = False,
+    distributed_backend: Optional[str] = None
 ) -> DeviceManager:
     """
     Factory function to create a DeviceManager instance.
@@ -318,11 +431,13 @@ def get_device_manager(
     Args:
         device_preference: One of "auto", "mps", "cuda", "cpu"
         force_cpu: Force CPU usage
+        enable_distributed: Enable distributed data parallel training
+        distributed_backend: Distributed backend ("nccl", "gloo", "auto", or None)
 
     Returns:
         DeviceManager instance
     """
-    return DeviceManager(device_preference, force_cpu)
+    return DeviceManager(device_preference, force_cpu, enable_distributed, distributed_backend)
 
 
 # Convenience functions
