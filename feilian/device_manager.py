@@ -317,8 +317,15 @@ class DeviceManager:
                 drop_last=drop_last
             )
             # Adjust batch size for distributed training
-            effective_batch_size = batch_size // self.distributed_info.world_size
+            if batch_size < self.distributed_info.world_size:
+                logger.warning(f"Batch size ({batch_size}) is smaller than world size ({self.distributed_info.world_size})")
+                logger.warning(f"Setting effective batch size to 1 per GPU. Consider increasing --batch-size to at least {self.distributed_info.world_size}")
+                effective_batch_size = 1
+            else:
+                effective_batch_size = batch_size // self.distributed_info.world_size
+            
             shuffle = False  # Shuffling handled by DistributedSampler
+            logger.info(f"Created distributed sampler for rank {self.distributed_info.rank}")
             logger.info(f"Using distributed sampler with effective batch size: {effective_batch_size}")
 
         dataloader = torch.utils.data.DataLoader(

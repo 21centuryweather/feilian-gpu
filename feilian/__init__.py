@@ -156,3 +156,28 @@ __all__ = [
     "estimate_memory_usage",
     "checkpoint",
 ]
+
+# Add NetCDF functions that are used in the main script
+try:
+    from .netcdf_loader import load_netcdf_wind_speed as load_wind_data
+    from .netcdf_loader import parse_wind_angle_from_netcdf_filename
+except ImportError:
+    # NetCDF not available - functions will fail at runtime
+    def load_wind_data(*args, **kwargs):
+        raise ImportError("NetCDF support not available")
+
+# Add NetCDF functions that are used in the main script
+try:
+    from .netcdf_loader import parse_wind_angle_from_netcdf_filename
+    
+    # Create wrapper for load_wind_data that maps to load_netcdf_wind_speed
+    def load_wind_data(filepath, netcdf_variable="wind_speed", z_level=1, transpose=False):
+        from .netcdf_loader import load_netcdf_wind_speed
+        return load_netcdf_wind_speed(filepath, variable_name=netcdf_variable, 
+                                      z_level=z_level, transpose=transpose)
+except ImportError:
+    # NetCDF not available - functions will fail at runtime
+    def load_wind_data(*args, **kwargs):
+        raise ImportError("NetCDF support not available")
+    def parse_wind_angle_from_netcdf_filename(*args, **kwargs):
+        raise ImportError("NetCDF support not available")

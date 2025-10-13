@@ -23,6 +23,25 @@ from feilian import (
 )
 from feilian import get_device_manager, print_available_devices
 
+# ROCm/HIP detection
+def check_rocm_environment():
+    """Check if running in ROCm environment and log relevant info."""
+    try:
+        import torch
+        if hasattr(torch.version, "hip") and torch.version.hip is not None:
+            logger.info(f"ROCm/HIP detected: {torch.version.hip}")
+            if torch.cuda.is_available():
+                logger.info(f"Number of GPU devices: {torch.cuda.device_count()}")
+                return True
+        elif torch.cuda.is_available():
+            logger.info("CUDA environment detected")
+            return True
+        else:
+            logger.warning("No GPU acceleration detected")
+    except Exception as e:
+        logger.warning(f"GPU detection failed: {e}")
+    return False
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -126,6 +145,12 @@ def setup_argparse():
         choices=["auto", "nccl", "gloo"],
         default="auto",
         help="Distributed backend for multi-GPU training",
+    )
+    parser.add_argument(
+        "--launch-method",
+        choices=["torchrun", "spawn"],
+        default="torchrun",
+        help="Distributed training launch method (torchrun or spawn)",
     )
 
     # Checkpoint arguments
@@ -292,6 +317,35 @@ def get_activation_function(activation_name):
 
 
 def main():
+    """Main training function."""
+    # Check GPU environment
+    check_rocm_environment()
+    parser = setup_argparse()
+    args = parser.parse_args()
+
+    # Handle spawn launch method
+    if args.distributed and args.launch_method == "spawn":
+        from feilian.distributed import spawn_feilian_training
+        
+        # Launch with spawn method
+        spawn_feilian_training(
+            data_path=args.data_path,
+            world_size=None,  # Auto-detect
+            batch_size=args.batch_size,
+            num_epochs=args.num_epochs,
+            learning_rate=args.learning_rate,
+            save_checkpoints=args.save_checkpoints,
+            checkpoint_interval=args.checkpoint_interval,
+        )
+        return
+    
+    # For non-spawn cases (torchrun or single-node), call the regular training logic
+    main_torchrun()
+
+def main_torchrun():
+    """Main training function for torchrun method (original logic)."""
+    parser = setup_argparse()
+    args = parser.parse_args()
     """Main training function."""
     parser = setup_argparse()
     args = parser.parse_args()
